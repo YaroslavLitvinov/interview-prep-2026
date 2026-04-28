@@ -1,0 +1,70 @@
+{
+  "type": "Spec",
+  "model_version": 1,
+  "version": 1,
+  "description": "Specification description",
+  "contains_unverified_constraints": false,
+  "features": {
+    "knowledge_doc_validation": {
+      "type": "Feature",
+      "model_version": 1,
+      "id": "knowledge_doc_validation",
+      "description": "Validate knowledge document structure: file location paths are real, descriptions avoid redundant Location: tags",
+      "goals": [
+        "Ensure Interview-Prep-INDEX.k.json is well-formed",
+        "All metadata.location paths point to existing files",
+        "Description fields do not redundantly contain 'Location:' text"
+      ],
+      "constraints": {
+        "constraint_description_no_location_tag": {
+          "id": "constraint_description_no_location_tag",
+          "cmd": "jq '.children.index.children[] | select(.description | contains(\"Location:\"))' $PROJECT_ROOT/Interview-Prep-INDEX.k.json | grep -q . && { echo 'Found Location: in description field'; exit 1; } || exit 0",
+          "description": "Negative: verify children.index.children.*.description does not contain 'Location:' occurrences",
+          "fails_count": 1
+        },
+        "constraint_location_files_exist": {
+          "id": "constraint_location_files_exist",
+          "cmd": "jq -r '.children.index.children[] | select(.metadata.location) | .metadata.location' $PROJECT_ROOT/Interview-Prep-INDEX.k.json | while read loc; do test -f \"$PROJECT_ROOT/$loc\" || { echo \"File not found: $loc\"; exit 1; }; done",
+          "description": "Structural: verify all children.index.children.*.metadata.location paths point to real files",
+          "fails_count": 1
+        }
+      }
+    },
+    "main_screen_rendering": {
+      "type": "Feature",
+      "model_version": 1,
+      "id": "main_screen_rendering",
+      "description": "Main screen renders with all required UI elements and features",
+      "goals": [
+        "All rendering tests pass including sidebar, chat interface, session state",
+        "Dark mode toggle available in settings"
+      ],
+      "constraints": {
+        "constraint_all_tests_pass": {
+          "id": "constraint_all_tests_pass",
+          "cmd": "cd $PROJECT_ROOT && python -m pytest tests/test_main_screen.py -v",
+          "description": "Behavioral: all main screen rendering tests must pass",
+          "fails_count": 1
+        }
+      }
+    },
+    "metadata_schema_validation": {
+      "type": "Feature",
+      "model_version": 1,
+      "id": "metadata_schema_validation",
+      "description": "Validate metadata fields contain only allowed attributes",
+      "goals": [
+        "All metadata objects in sub-indexes must contain ONLY: resource_location, type, keywords, begin_page, end_page",
+        "No unexpected/unknown fields allowed in metadata"
+      ],
+      "constraints": {
+        "constraint_metadata_only_allowed_attributes": {
+          "id": "constraint_metadata_only_allowed_attributes",
+          "cmd": "jq -r '.children.index.children[] | select(.metadata.location) | .metadata.location' $PROJECT_ROOT/Interview-Prep-INDEX.k.json | while read loc; do unexpected=$(jq '.children | to_entries[] | .value | objects | select(.metadata | type == \"object\") | select(.metadata | keys[] as $k | ($k | IN(\"resource_location\", \"type\", \"keywords\", \"begin_page\", \"end_page\") | not)) | {file: .id, invalid_keys: [.metadata | keys[] as $k | select($k | IN(\"resource_location\", \"type\", \"keywords\", \"begin_page\", \"end_page\") | not)]}' \"$PROJECT_ROOT/$loc\" 2>/dev/null | grep -q . && echo \"Found invalid metadata attributes\" && exit 1 || true; done",
+          "description": "Structural: metadata objects must only contain allowed attributes (resource_location, type, keywords, begin_page, end_page)",
+          "fails_count": 1
+        }
+      }
+    }
+  }
+}
