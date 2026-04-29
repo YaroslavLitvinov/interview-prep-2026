@@ -58,10 +58,96 @@
         "No unexpected/unknown fields allowed in metadata"
       ],
       "constraints": {
-        "constraint_metadata_only_allowed_attributes": {
-          "id": "constraint_metadata_only_allowed_attributes",
-          "cmd": "jq -r '.children.index.children[] | select(.metadata.location) | .metadata.location' $PROJECT_ROOT/Interview-Prep-INDEX.k.json | while read loc; do unexpected=$(jq '.children | to_entries[] | .value | objects | select(.metadata | type == \"object\") | select(.metadata | keys[] as $k | ($k | IN(\"resource_location\", \"type\", \"keywords\", \"begin_page\", \"end_page\") | not)) | {file: .id, invalid_keys: [.metadata | keys[] as $k | select($k | IN(\"resource_location\", \"type\", \"keywords\", \"begin_page\", \"end_page\") | not)]}' \"$PROJECT_ROOT/$loc\" 2>/dev/null | grep -q . && echo \"Found invalid metadata attributes\" && exit 1 || true; done",
-          "description": "Structural: metadata objects must only contain allowed attributes (resource_location, type, keywords, begin_page, end_page)",
+        "constraint_referred_files_nested_metadata_schema": {
+          "id": "constraint_referred_files_nested_metadata_schema",
+          "cmd": "for f in $PROJECT_ROOT/index/*.k.json; do invalid=$(jq -r '[.children // {} | to_entries[] | .value | (.children // {}) | to_entries[] | .value | select((.metadata // {}) | (has(\"keywords\") and has(\"begin_page\") and has(\"end_page\")) | not) | .id] | length' \"$f\" 2>/dev/null); if [ -n \"$invalid\" ] && [ \"$invalid\" -gt 0 ]; then echo \"File $(basename $f): $invalid nested children with invalid metadata\"; exit 1; fi; done; exit 0",
+          "description": "Structural: nested children in files referred by main index must have metadata with resource_location, keywords, begin_page, end_page",
+          "fails_count": 1
+        },
+        "constraint_referred_file_root_metadata_resource_location_only": {
+          "id": "constraint_referred_file_root_metadata_resource_location_only",
+          "cmd": "locs=$(jq -r '.children.index.children[] | select(.metadata.resource_location) | .metadata.resource_location' $PROJECT_ROOT/Interview-Prep-INDEX.k.json); for loc in $locs; do keys=$(jq -r '.metadata // {} | keys | join(\",\")' \"$PROJECT_ROOT/$loc\"); if [ \"$keys\" != \"resource_location\" ]; then echo \"Referred file $loc: root metadata keys = '$keys' (expected: 'resource_location')\"; exit 1; fi; done; exit 0",
+          "description": "Structural: each referred file's root metadata must contain ONLY resource_location key",
+          "fails_count": 1
+        },
+        "constraint_root_allows_resloc_type_nested_forbids": {
+          "id": "constraint_root_allows_resloc_type_nested_forbids",
+          "cmd": "locs=$(jq -r '.children.index.children[] | select(.metadata.resource_location) | .metadata.resource_location' $PROJECT_ROOT/Interview-Prep-INDEX.k.json); for loc in $locs; do bad_root=$(jq -r '.metadata // {} | keys[] | select(. != \"resource_location\" and . != \"type\")' \"$PROJECT_ROOT/$loc\"); if [ -n \"$bad_root\" ]; then echo \"Root in $loc has disallowed keys: $bad_root\"; exit 1; fi; bad_nested=$(jq -r '[.children // {} | to_entries[] | .value | (.children // {}) | to_entries[] | .value | select((.metadata // {}) | has(\"resource_location\") or has(\"type\")) | .id] | length' \"$PROJECT_ROOT/$loc\"); if [ \"$bad_nested\" -gt 0 ]; then echo \"$loc has $bad_nested nested children with resource_location/type\"; exit 1; fi; done; exit 0",
+          "description": "Structural: referred file root metadata keys allowed only {resource_location, type}; nested metadata must not have resource_location or type",
+          "fails_count": 1
+        }
+      }
+    },
+    "superset_schema_validation": {
+      "type": "Feature",
+      "model_version": 1,
+      "id": "superset_schema_validation",
+      "description": "Validate superset.k.json structure: sections have tags, descriptions, and question children with q1-qN keys",
+      "goals": [
+        "All top-level children must have metadata.tags with comma-separated keywords",
+        "All top-level children must have description",
+        "All top-level children must have nested children (q1, q2, q3, etc.)",
+        "All question children must have label and description"
+      ],
+      "constraints": {
+        "constraint_sections_have_tags": {
+          "id": "constraint_sections_have_tags",
+          "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json && children=$(jq '.children // {}' $PROJECT_ROOT/prep/superset.k.json | jq 'length') && test \"$children\" -gt 0 || { echo 'No sections found'; exit 1; }; invalid=$(jq '[.children // {} | to_entries[] | select(.value.metadata == null or .value.metadata.tags == null or .value.metadata.tags == \"\") | .key] | length' $PROJECT_ROOT/prep/superset.k.json); test \"$invalid\" -eq 0 || { echo 'Sections without tags found'; exit 1; }",
+          "description": "Structural: all sections must have metadata.tags (comma-separated)",
+          "fails_count": 1
+        },
+        "constraint_sections_have_description": {
+          "id": "constraint_sections_have_description",
+          "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json && children=$(jq '.children // {}' $PROJECT_ROOT/prep/superset.k.json | jq 'length') && test \"$children\" -gt 0 || { echo 'No sections found'; exit 1; }; invalid=$(jq '[.children // {} | to_entries[] | select(.value.description == null or .value.description == \"\") | .key] | length' $PROJECT_ROOT/prep/superset.k.json); test \"$invalid\" -eq 0 || { echo 'Sections without description found'; exit 1; }",
+          "description": "Structural: all sections must have non-empty description",
+          "fails_count": 1
+        },
+        "constraint_sections_have_children": {
+          "id": "constraint_sections_have_children",
+          "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json && sections=$(jq '.children // {}' $PROJECT_ROOT/prep/superset.k.json | jq 'length') && test \"$sections\" -gt 0 || { echo 'No sections found'; exit 1; }; invalid=$(jq '[.children // {} | to_entries[] | select(.value.children == null or (.value.children | length == 0)) | .key] | length' $PROJECT_ROOT/prep/superset.k.json); test \"$invalid\" -eq 0 || { echo 'Sections without children found'; exit 1; }",
+          "description": "Structural: all sections must have nested children (questions)",
+          "fails_count": 1
+        },
+        "constraint_questions_q_format": {
+          "id": "constraint_questions_q_format",
+          "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json && sections=$(jq '.children // {}' $PROJECT_ROOT/prep/superset.k.json | jq 'length') && test \"$sections\" -gt 0 || { echo 'No sections found'; exit 1; }; invalid=$(jq '[.children // {} | to_entries[] | .value.children // {} | to_entries[] | select(.key | test(\"^q[0-9]+$\") | not) | .key] | length' $PROJECT_ROOT/prep/superset.k.json); test \"$invalid\" -eq 0 || { echo 'Invalid question keys found'; exit 1; }",
+          "description": "Structural: all question keys must match q[0-9]+ format (q1, q2, q3...)",
+          "fails_count": 1
+        },
+        "constraint_questions_have_label_description": {
+          "id": "constraint_questions_have_label_description",
+          "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json && sections=$(jq '.children // {}' $PROJECT_ROOT/prep/superset.k.json | jq 'length') && test \"$sections\" -gt 0 || { echo 'No sections found'; exit 1; }; invalid=$(jq '[.children // {} | to_entries[] | .value.children // {} | to_entries[] | select(.value.label == null or .value.label == \"\" or .value.description == null or .value.description == \"\") | .key] | length' $PROJECT_ROOT/prep/superset.k.json); test \"$invalid\" -eq 0 || { echo 'Questions missing label or description found'; exit 1; }",
+          "description": "Structural: all questions must have non-empty label and description",
+          "fails_count": 1
+        },
+        "constraint_toc_enabled": {
+          "id": "constraint_toc_enabled",
+          "cmd": "toc_enabled=$(jq '.opts.render_toc' $PROJECT_ROOT/prep/superset.k.json); test \"$toc_enabled\" = \"true\" || { echo 'TOC not enabled'; exit 1; }",
+          "description": "Structural: render_toc must be enabled in opts",
+          "fails_count": 1
+        },
+        "constraint_questions_have_tags": {
+          "id": "constraint_questions_have_tags",
+          "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json && sections=$(jq '.children // {} | length' $PROJECT_ROOT/prep/superset.k.json) && test \"$sections\" -gt 0 || { echo 'No sections found'; exit 1; }; invalid=$(jq '[.children // {} | to_entries[] | .value.children // {} | to_entries[] | select(.value.metadata == null or .value.metadata.tags == null or .value.metadata.tags == \"\") | .key] | length' $PROJECT_ROOT/prep/superset.k.json); test \"$invalid\" -eq 0 || { echo 'Questions without tags found'; exit 1; }",
+          "description": "Structural: all questions (q1-qN) must have metadata.tags (comma-separated keywords)",
+          "fails_count": 1
+        },
+        "constraint_tags_format": {
+          "id": "constraint_tags_format",
+          "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json && jq '[.children // {} | to_entries[] | ((.value.metadata.tags // \"\") | split(\",\") | map(ltrimstr(\" \") | rtrimstr(\" \")) | map(select(length > 0) | split(\" \") | length) | map(select(. > 3))), (.value.children // {} | to_entries[] | ((.value.metadata.tags // \"\") | split(\",\") | map(ltrimstr(\" \") | rtrimstr(\" \")) | map(select(length > 0) | split(\" \") | length) | map(select(. > 3))))] | flatten | length' $PROJECT_ROOT/prep/superset.k.json | grep -q '^0$' || { echo 'Tags with > 3 words found'; exit 1; }",
+          "description": "Format: each tag (comma-separated) must have at most 3 words (e.g., 'system-design' OK, 'system design interview' NOT OK)",
+          "fails_count": 1
+        },
+        "constraint_questions_have_mermaid": {
+          "id": "constraint_questions_have_mermaid",
+          "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json && sections=$(jq '.children // {}' $PROJECT_ROOT/prep/superset.k.json | jq 'length') && test \"$sections\" -gt 0 || { echo 'No sections found'; exit 1; }; invalid=$(jq '[.children // {} | to_entries[] | .value.children // {} | to_entries[] | select(.value.metadata == null or .value.metadata.mermaid == null or .value.metadata.mermaid == \"\") | .key] | length' $PROJECT_ROOT/prep/superset.k.json); test \"$invalid\" -eq 0 || { echo \"Questions without mermaid: $invalid\"; exit 1; }",
+          "description": "Structural: all questions must have metadata.mermaid with diagram visualization",
+          "fails_count": 1
+        },
+        "constraint_tags_max_one_hyphen": {
+          "id": "constraint_tags_max_one_hyphen",
+          "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json || { echo 'File not found'; exit 1; }; invalid=$(jq '[.children // {} | to_entries[] | .value.children // {} | to_entries[] | select(.value.metadata.tags != null and .value.metadata.tags != \"\") | .value.metadata.tags | split(\",\") | .[] | select((gsub(\" +\"; \"\") | split(\"-\") | length) > 2)] | length' $PROJECT_ROOT/prep/superset.k.json); test \"$invalid\" -eq 0 || { echo \"Tags with multiple hyphens: $invalid\"; exit 1; }",
+          "description": "Format: each tag (separated by comma) must have max one hyphen (parent-child format)",
           "fails_count": 1
         }
       }
