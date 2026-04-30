@@ -39,37 +39,8 @@ st.markdown("""
     .main { padding: 2rem; }
     .stTabs [data-baseweb="tab-list"] button { font-weight: bold; }
     .stChatMessage { border-radius: 0.5rem; padding: 1rem; }
-    /* Universal left alignment for all sidebar content */
-    [data-testid="stSidebarContent"] { text-align: left !important; }
-    [data-testid="stSidebarContent"] * { text-align: left !important; justify-content: flex-start !important; }
-    /* Buttons */
-    [data-testid="stSidebarContent"] .stButton { text-align: left !important; }
-    [data-testid="stSidebarContent"] button {
-        justify-content: flex-start !important;
-        text-align: left !important;
-        display: flex !important;
-        align-items: center !important;
-    }
-    [data-testid="stSidebarContent"] button > * {
-        text-align: left !important;
-        justify-content: flex-start !important;
-        display: flex !important;
-    }
-    /* Expanders */
-    [data-testid="stSidebarContent"] details { text-align: left !important; }
-    [data-testid="stSidebarContent"] summary {
-        text-align: left !important;
-        display: flex !important;
-        justify-content: flex-start !important;
-    }
-    [data-testid="stSidebarContent"] summary > * {
-        text-align: left !important;
-        justify-content: flex-start !important;
-        display: flex !important;
-    }
-    /* Reduce gap in sidebar flex container */
+    /* Compact sidebar spacing only — no layout overrides that break widgets */
     [data-testid="stSidebarContent"] { gap: 0.25rem !important; }
-    /* Reduce individual expander spacing */
     [data-testid="stSidebarContent"] .stExpander { margin: 0 !important; }
     [data-testid="stSidebarContent"] details { margin: 0 !important; padding: 0 !important; }
     [data-testid="stSidebarContent"] .streamlit-expanderContent { gap: 0.25rem !important; }
@@ -131,6 +102,57 @@ if "selected_begin_page" not in st.session_state:
     st.session_state.selected_begin_page = None
 if "selected_end_page" not in st.session_state:
     st.session_state.selected_end_page = None
+if "_active_tag" not in st.session_state:
+    st.session_state["_active_tag"] = None
+
+_MERMAID_DIRECTIONS = ["TD", "LR", "BT", "RL"]
+
+def render_mermaid(code: str, key: str = "mermaid") -> None:
+    from streamlit_mermaid import st_mermaid
+
+    # Detect direction declared in the code; fall back to TD
+    _m = re.match(r'^(?:graph|flowchart)\s+(\w+)', code.strip(), re.IGNORECASE)
+    _code_dir = (_m.group(1).upper() if _m else "TD")
+    if _code_dir not in _MERMAID_DIRECTIONS:
+        _code_dir = "TD"
+
+    _orient_key = f"_mermaid_dir_{key}"
+    _lock_key = f"_mermaid_lock_{key}"
+    if _orient_key not in st.session_state:
+        st.session_state[_orient_key] = _code_dir
+    if _lock_key not in st.session_state:
+        st.session_state[_lock_key] = True  # locked by default
+
+    # Single pills row: directions + 🔒 lock toggle
+    _default_sel = [st.session_state[_orient_key]]
+    if st.session_state[_lock_key]:
+        _default_sel.append("🔒")
+
+    _sel = st.pills(
+        "Controls",
+        _MERMAID_DIRECTIONS + ["🔒"],
+        default=_default_sel,
+        selection_mode="multi",
+        key=f"_mermaid_pills_{key}",
+        label_visibility="collapsed",
+    )
+    _sel = _sel or []
+    _sel_dirs = [o for o in _sel if o in _MERMAID_DIRECTIONS]
+    _dir = _sel_dirs[0] if _sel_dirs else st.session_state[_orient_key]
+    _locked = "🔒" in _sel
+    st.session_state[_orient_key] = _dir
+    st.session_state[_lock_key] = _locked
+
+    # Rewrite the direction token in the first graph/flowchart line
+    _modified = re.sub(
+        r'^((?:graph|flowchart)\s+)\w+',
+        lambda m: m.group(1) + _dir,
+        code,
+        count=1,
+        flags=re.MULTILINE | re.IGNORECASE,
+    )
+    st_mermaid(_modified, pan=not _locked, zoom=not _locked, show_controls=False, key=key)
+
 
 # Helper function to read markdown files
 def read_markdown(file_path):
@@ -450,52 +472,131 @@ st.sidebar.markdown("---")
 
 # Tags Navigation Container Pane
 with st.sidebar.container(border=True):
-    st.markdown("**🏷️ Tags Cloud**")
+    st.markdown('<div data-testid="tags-cloud-container"></div>', unsafe_allow_html=True)
+    st.markdown("**🏷️ Tags**")
+
+    # Restore persisted selections from URL: format ?q=parent.child.N or ?q=parent.N
+    # N is 1-based (matches the displayed counter); absent means 1 (first topic).
+    _qp_val = st.query_params.get("q") or ""
+    _qp_parts = _qp_val.split(".") if _qp_val else []
+    _qp_parent = _qp_parts[0] if len(_qp_parts) >= 1 else None
+    # Second segment: numeric → 1-based index (no child); alphabetic → child tag
+    if len(_qp_parts) >= 2 and _qp_parts[1].lstrip("-").isdigit():
+        _qp_child = None
+        _qp_topic_idx = max(0, int(_qp_parts[1]) - 1)
+    else:
+        _qp_child = _qp_parts[1] if len(_qp_parts) >= 2 else None
+        try:
+            _qp_topic_idx = max(0, int(_qp_parts[2]) - 1) if len(_qp_parts) >= 3 else 0
+        except (ValueError, TypeError):
+            _qp_topic_idx = 0
+
+    sel_parent = None
+    sel_child = None
 
     if os.path.exists(superset_path):
-        try:
-            root_tags = get_tags(superset_path)
-            if root_tags:
-                st.markdown("""
-                <style>
-                    .tags-container {
-                        display: flex;
-                        flex-wrap: wrap;
-                        gap: 6px;
-                        margin: 8px 0;
-                    }
-                    .tag-btn {
-                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                        color: white;
-                        border: none;
-                        border-radius: 10px;
-                        padding: 5px 10px;
-                        font-size: 12px;
-                        font-weight: 600;
-                        cursor: pointer;
-                        white-space: nowrap;
-                    }
-                    .tag-btn:hover {
-                        opacity: 0.9;
-                    }
-                </style>
-                """, unsafe_allow_html=True)
+        root_tags = get_tags(superset_path)
+        if root_tags:
+            sel_parent = st.pills(
+                "Category",
+                options=root_tags,
+                selection_mode="single",
+                key="sel_parent_pills",
+                label_visibility="collapsed",
+                default=_qp_parent if _qp_parent in root_tags else None,
+            )
 
-                # Build HTML for parent tags
-                tags_html = '<div class="tags-container">'
-                for tag in sorted(root_tags):
-                    tags_html += f'<button class="tag-btn">{tag}</button>'
-                tags_html += '</div>'
-                st.markdown(tags_html, unsafe_allow_html=True)
-        except Exception as e:
-            st.error(f"Error loading tags")
+
+            if sel_parent:
+                child_tags = get_tags(superset_path, sel_parent)
+                if child_tags:
+                    st.markdown(
+                        f"<div style='font-size:11px;color:#888;margin:4px 0 2px'>↳ {sel_parent}</div>",
+                        unsafe_allow_html=True,
+                    )
+                    # Only restore child default when it belongs to this parent
+                    _child_default = _qp_child if _qp_child in child_tags else None
+                    sel_child = st.pills(
+                        "Subcategory",
+                        options=child_tags,
+                        selection_mode="single",
+                        key=f"sel_child_pills_{sel_parent}",
+                        label_visibility="collapsed",
+                        default=_child_default,
+                    )
+
     else:
         st.error(f"❌ Superset file not found: {superset_path}")
 
-    # Show current selection
-    if "selected_child" in st.session_state:
-        st.markdown("---")
-        st.success(f"✅ {st.session_state.selected_parent_tag.title()} → {st.session_state.selected_child}")
+# Derive active tag; detect tag change to know whether to reset topic position
+_active_tag = (
+    f"{sel_parent}-{sel_child}" if sel_parent and sel_child else sel_parent
+)
+_tag_changed = st.session_state["_active_tag"] != _active_tag
+if _tag_changed:
+    st.session_state["_active_tag"] = _active_tag
+    st.session_state.pop("selected_topic", None)
+    st.session_state.pop("selected_topic_tag", None)
+    st.session_state.pop("selected_topic_idx", None)
+
+# Topics pane — filtered by active tag, or all topics (max 20) when no tag selected
+with st.sidebar.container(border=True):
+    _topics = get_topics(superset_path, _active_tag)
+    if _active_tag:
+        _tag_disp = _active_tag.replace("-", " → ")
+        st.markdown(f"**📋 {_tag_disp}** `{len(_topics)}`")
+    else:
+        st.markdown(f"**📋 All Topics** `{len(_topics)}`")
+
+    if _topics:
+        _radio_key = f"topic_radio_{_active_tag}"
+        _sel_topic_label = st.session_state.get("selected_topic", {}).get("label", "")
+
+        # If Prev/Next requested a programmatic jump, pre-set the radio key
+        # BEFORE the widget is instantiated (setting after is forbidden by Streamlit).
+        _pending = st.session_state.pop("_pending_nav_label", None)
+        if _pending is not None:
+            st.session_state[_radio_key] = _pending
+
+        # Compute fallback index for the case the key is not yet in session state
+        if _tag_changed or not _sel_topic_label:
+            _radio_idx = 0 if _tag_changed else min(_qp_topic_idx, len(_topics) - 1)
+        else:
+            _radio_idx = next(
+                (i for i, t in enumerate(_topics) if t["label"] == _sel_topic_label),
+                0,
+            )
+
+        _chosen = st.radio(
+            "Topics",
+            options=[t["label"] for t in _topics],
+            index=_radio_idx,
+            key=_radio_key,
+            label_visibility="collapsed",
+        )
+        _chosen_topic = next((t for t in _topics if t["label"] == _chosen), None)
+        if _chosen_topic:
+            _chosen_idx = _topics.index(_chosen_topic)
+            st.session_state["selected_topic"] = _chosen_topic
+            st.session_state["selected_topic_tag"] = _active_tag
+            st.session_state["selected_topic_idx"] = _chosen_idx
+
+# Sync full navigation state to URL as ?q=parent.child.idx or ?q=parent.idx
+def _build_nav_q() -> str | None:
+    if not sel_parent:
+        return None
+    parts = [sel_parent]
+    if sel_child:
+        parts.append(sel_child)
+    idx = st.session_state.get("selected_topic_idx")
+    if idx:  # omit when 0 (1-based position 1 = default, no need to show)
+        parts.append(str(idx + 1))
+    return ".".join(parts)
+
+_nav_q = _build_nav_q()
+st.query_params.clear()
+if _nav_q:
+    st.query_params["q"] = _nav_q
 
 st.sidebar.markdown("---")
 
@@ -506,71 +607,61 @@ with st.sidebar.expander("ℹ️ About"):
     
     Comprehensive preparation for 2026 interviews:
     - System design fundamentals
-    - Technical depth (6 areas)
     - Coding skills
     - Behavioral interview prep
-    - Company research guide
+    - etc
+    
+    Curated by Claude Code Agent, organized by topic and tags for easy navigation.
+             
+    Created with Clockwork-Pilot, using Streamlit.
     """)
 
-st.sidebar.markdown("---")
-
-# Settings section
-with st.sidebar.expander("⚙️ Settings"):
-    show_chat_history = st.checkbox("Show chat history", value=True, key=TEST_IDS["show_chat_history"])
-    dark_mode = st.checkbox("Dark mode", value=False, key=TEST_IDS["dark_mode"])
-    font_size = st.slider("Font size", 10, 18, 14, key=TEST_IDS["font_size"])
-    st.markdown(f"<style>body {{ font-size: {font_size}px; }}</style>", unsafe_allow_html=True)
 
 # ============================================================================
 # MAIN CONTENT AREA
 # ============================================================================
 
+# Title always at top
+st.title("📚 Interview Prep 2026")
+st.markdown("---")
+
 # Display selected topic from tags navigation
 if "selected_topic" in st.session_state:
     topic = st.session_state.selected_topic
-    tag = st.session_state.selected_topic_tag
+    tag = st.session_state.get("selected_topic_tag") or _active_tag or "Topics"
+    st.header(f"📚 {tag.replace('-', ' → ').title()}")
 
-    st.header(f"📚 {tag.title()}")
-    st.subheader(topic['label'])
-    st.caption(f"📂 {topic['section']}")
-    st.markdown(f"{topic['description']}")
-    st.markdown("---")
-
-    # Navigation for multiple topics
+    # Prev / Next at the top so their position is stable regardless of content height
     if "selected_topic_idx" not in st.session_state:
         st.session_state.selected_topic_idx = 0
 
     topics = get_topics(superset_path, tag)
     if len(topics) > 1:
-        col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 2, 1])
+        def _navigate(new_idx: int) -> None:
+            new_topic = topics[new_idx]
+            st.session_state.selected_topic_idx = new_idx
+            st.session_state.selected_topic = new_topic
+            st.session_state["_pending_nav_label"] = new_topic["label"]
+            st.rerun()
+
+        col1, col2 = st.columns(2)
         with col1:
             if st.button("← Prev", use_container_width=True):
                 if st.session_state.selected_topic_idx > 0:
-                    st.session_state.selected_topic_idx -= 1
-                    st.session_state.selected_topic = topics[st.session_state.selected_topic_idx]
-                    st.rerun()
+                    _navigate(st.session_state.selected_topic_idx - 1)
         with col2:
-            st.write(f"{st.session_state.selected_topic_idx + 1}/{len(topics)}")
-        with col3:
             if st.button("Next →", use_container_width=True):
                 if st.session_state.selected_topic_idx < len(topics) - 1:
-                    st.session_state.selected_topic_idx += 1
-                    st.session_state.selected_topic = topics[st.session_state.selected_topic_idx]
-                    st.rerun()
-        with col4:
-            if "content_view" not in st.session_state:
-                st.session_state.content_view = "answer"
-            view_options = ["answer", "mermaid", "code"]
-            st.session_state.content_view = st.selectbox(
-                "View:",
-                view_options,
-                index=view_options.index(st.session_state.content_view),
-                key="view_selector"
-            )
-        with col5:
-            show_all = st.checkbox("Show All", value=False, key="show_all_content")
+                    _navigate(st.session_state.selected_topic_idx + 1)
 
-    # Load metadata from superset for this topic
+    st.subheader(topic['label'])
+    st.caption(f"📂 {topic['section']}")
+    if topic.get('tags'):
+        st.caption(f"🏷️ **Tags:** {topic['tags']}")
+    st.markdown(f"{topic['description']}")
+    st.markdown("---")
+
+    # Load metadata and show all content sections
     try:
         with open(superset_path, 'r') as f:
             data = json.load(f)
@@ -583,67 +674,33 @@ if "selected_topic" in st.session_state:
                     break
 
         if metadata:
-            st.markdown("---")
 
-            if "show_all_content" not in st.session_state:
-                st.session_state.show_all_content = False
+            if metadata.get('mermaid'):
+                st.markdown("### 📊 Diagram")
+                try:
+                    _mkey = re.sub(r'[^a-z0-9]', '_', topic['label'].lower())[:40]
+                    render_mermaid(metadata['mermaid'], key=_mkey)
+                except Exception:
+                    st.code(metadata['mermaid'], language='mermaid')
 
-            if st.session_state.get('show_all_content'):
-                # Show all content stacked
-                if metadata.get('answer'):
-                    st.markdown("### 📝 Answer")
-                    st.markdown(metadata['answer'])
+            if metadata.get('answer'):
+                st.markdown("### 📝 Answer")
+                st.markdown(metadata['answer'])
 
-                if metadata.get('mermaid'):
-                    st.markdown("### 📊 Diagram")
-                    try:
-                        from streamlit_mermaid import mermaid
-                        mermaid(metadata['mermaid'])
-                    except ImportError:
-                        st.code(metadata['mermaid'], language='mermaid')
+            _SKIP_KEYS = {'answer', 'mermaid', 'tags'}
+            _LANG_MAP = {'js': 'javascript', 'cc': 'cpp', 'py': 'python'}
+            for _mk, _mv in metadata.items():
+                if _mk in _SKIP_KEYS or not _mv:
+                    continue
+                _lang = _LANG_MAP.get(_mk, _mk)
+                st.markdown(f"### 💻 {_mk.upper()}")
+                st.code(_mv, language=_lang)
 
-                for lang in ['python', 'javascript', 'rust', 'go', 'cpp', 'c']:
-                    code_key = f'code_{lang}'
-                    if metadata.get(code_key):
-                        st.markdown(f"### 💻 {lang.upper()}")
-                        st.code(metadata[code_key], language=lang)
-            else:
-                # Show based on selected view
-                if st.session_state.content_view == "answer":
-                    if metadata.get('answer'):
-                        st.markdown(metadata['answer'])
-                    else:
-                        st.info("No answer provided")
-
-                elif st.session_state.content_view == "mermaid":
-                    if metadata.get('mermaid'):
-                        try:
-                            from streamlit_mermaid import mermaid
-                            mermaid(metadata['mermaid'])
-                        except ImportError:
-                            st.code(metadata['mermaid'], language='mermaid')
-                    else:
-                        st.info("No diagram provided")
-
-                elif st.session_state.content_view == "code":
-                    available_langs = []
-                    for lang in ['python', 'javascript', 'rust', 'go', 'cpp', 'c']:
-                        if metadata.get(f'code_{lang}'):
-                            available_langs.append(lang)
-
-                    if available_langs:
-                        selected_lang = st.selectbox("Select language:", available_langs, key="code_lang")
-                        st.code(metadata[f'code_{selected_lang}'], language=selected_lang)
-                    else:
-                        st.info("No code examples provided")
-
-            if metadata.get('tags'):
-                st.caption(f"🏷️ **Tags:** {metadata['tags']}")
     except Exception as e:
         st.error(f"Error loading question metadata: {e}")
 
 # Check if old-style indexed content is selected (for backwards compatibility with tests)
-if "selected_main_topic" in st.session_state and "selected_subtopic" in st.session_state:
+if st.session_state.get("selected_main_topic") and st.session_state.get("selected_subtopic"):
     # Old Interview-Prep-INDEX based navigation
     main_topic = st.session_state.selected_main_topic
     subtopic = st.session_state.selected_subtopic
@@ -708,14 +765,10 @@ elif "selected_parent_tag" in st.session_state and "selected_child" in st.sessio
         if questions_found:
             st.write(f"**Found {len(questions_found)} question(s)**")
 
-            # Initialize content view state
-            if "content_view" not in st.session_state:
-                st.session_state.content_view = "answer"
             if "current_question_idx" not in st.session_state:
                 st.session_state.current_question_idx = 0
 
-            # Navigation for questions
-            col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 2, 1])
+            col1, col2, col3 = st.columns([1, 1, 1])
             with col1:
                 if st.button("← Prev", use_container_width=True):
                     if st.session_state.current_question_idx > 0:
@@ -728,20 +781,8 @@ elif "selected_parent_tag" in st.session_state and "selected_child" in st.sessio
                     if st.session_state.current_question_idx < len(questions_found) - 1:
                         st.session_state.current_question_idx += 1
                         st.rerun()
-            with col4:
-                view_options = ["answer", "mermaid", "code"]
-                st.session_state.content_view = st.selectbox(
-                    "View:",
-                    view_options,
-                    index=view_options.index(st.session_state.content_view),
-                    key="view_selector"
-                )
-            with col5:
-                show_all = st.checkbox("Show All", value=False, key="show_all_content")
 
-            # Get current question
             current_q = questions_found[st.session_state.current_question_idx]
-
             st.markdown("---")
             st.subheader(f"Q{st.session_state.current_question_idx + 1}: {current_q['label']}")
             st.caption(f"📂 {current_q['section']}")
@@ -749,62 +790,24 @@ elif "selected_parent_tag" in st.session_state and "selected_child" in st.sessio
 
             metadata = current_q['metadata']
 
-            # Content display logic
-            if show_all:
-                # Show all content types stacked
-                if metadata.get('answer'):
-                    st.markdown("### 📝 Answer")
-                    st.markdown(metadata['answer'])
+            if metadata.get('answer'):
+                st.markdown("### 📝 Answer")
+                st.markdown(metadata['answer'])
 
-                if metadata.get('mermaid'):
-                    st.markdown("### 📊 Diagram")
-                    try:
-                        from streamlit_mermaid import mermaid
-                        mermaid(metadata['mermaid'])
-                    except ImportError:
-                        st.warning("streamlit-mermaid not installed. Install with: pip install streamlit-mermaid")
-                        st.code(metadata['mermaid'], language='mermaid')
+            if metadata.get('mermaid'):
+                st.markdown("### 📊 Diagram")
+                try:
+                    _mkey = re.sub(r'[^a-z0-9]', '_', current_q['label'].lower())[:40]
+                    render_mermaid(metadata['mermaid'], key=_mkey)
+                except Exception:
+                    st.code(metadata['mermaid'], language='mermaid')
 
-                # Check for language-specific code
-                for lang in ['python', 'javascript', 'rust', 'go', 'cpp', 'c']:
-                    code_key = f'code_{lang}'
-                    if metadata.get(code_key):
-                        st.markdown(f"### 💻 {lang.upper()} Code")
-                        st.code(metadata[code_key], language=lang)
-            else:
-                # Show based on selected view
-                if st.session_state.content_view == "answer":
-                    if metadata.get('answer'):
-                        st.markdown(metadata['answer'])
-                    else:
-                        st.info("No answer provided for this question")
+            for lang in ['python', 'javascript', 'rust', 'go', 'cpp', 'c']:
+                code_key = f'code_{lang}'
+                if metadata.get(code_key):
+                    st.markdown(f"### 💻 {lang.upper()} Code")
+                    st.code(metadata[code_key], language=lang)
 
-                elif st.session_state.content_view == "mermaid":
-                    if metadata.get('mermaid'):
-                        try:
-                            from streamlit_mermaid import mermaid
-                            mermaid(metadata['mermaid'])
-                        except ImportError:
-                            st.warning("streamlit-mermaid not installed. Install with: pip install streamlit-mermaid")
-                            st.code(metadata['mermaid'], language='mermaid')
-                    else:
-                        st.info("No diagram provided for this question")
-
-                elif st.session_state.content_view == "code":
-                    # Find available code languages
-                    available_langs = []
-                    for lang in ['python', 'javascript', 'rust', 'go', 'cpp', 'c']:
-                        if metadata.get(f'code_{lang}'):
-                            available_langs.append(lang)
-
-                    if available_langs:
-                        selected_lang = st.selectbox("Select language:", available_langs, key="code_lang_selector")
-                        code_key = f'code_{selected_lang}'
-                        st.code(metadata[code_key], language=selected_lang)
-                    else:
-                        st.info("No code examples provided for this question")
-
-            # Show tags
             if metadata.get('tags'):
                 st.markdown("---")
                 st.caption(f"🏷️ **Tags:** {metadata['tags']}")
@@ -816,89 +819,17 @@ elif "selected_parent_tag" in st.session_state and "selected_child" in st.sessio
         st.error(f"Error loading questions: {e}")
 
 else:
-    st.title("📚 Interview Prep 2026")
-    st.markdown("---")
-    st.write("""
-    Welcome to your comprehensive interview preparation knowledge base!
+    pass  # no additional content for this state combination
 
-    **How to use:**
-    1. Select a topic category from the left sidebar
-    2. Choose a specific topic to explore
-    3. Browse through interview questions and answers
-
-    **Coverage:**
-    - 27 major topic categories
-    - 110+ subtopics
-    - 334 interview questions
-    - Real-world examples and case studies
-    """)
-
-# ============================================================================
-# CHAT INTERFACE
-# ============================================================================
-
-st.markdown("---")
-st.subheader("💬 Chat with Claude")
-st.write("Ask me questions about any interview topic. I'll help you prepare!")
-
-# Chat input
-col1, col2 = st.columns([4, 1])
-
-with col1:
-    user_question = st.chat_input(
-        "Ask about system design, coding, behavioral prep, or anything else...",
-        key=TEST_IDS["chat_input"]
-    )
-
-with col2:
-    send_button = st.button("Send", type="primary", key=TEST_IDS["send_button"])
-
-# Process question
-if send_button and user_question:
-    # Add to chat history
-    st.session_state.chat_history.append({
-        "role": "user",
-        "content": user_question
-    })
-    
-    # Display user message
-    with st.chat_message("user"):
-        st.write(user_question)
-    
-    # Get response from Claude
-    with st.spinner("🤔 Thinking..."):
-        response = ask_claude(user_question)
-    
-    # Add to chat history
-    st.session_state.chat_history.append({
-        "role": "assistant",
-        "content": response
-    })
-    
-    # Display assistant message
-    with st.chat_message("assistant"):
-        st.write(response)
-
-# Display chat history
-if show_chat_history and st.session_state.chat_history:
-    st.markdown("---")
-    st.subheader("📜 Chat History")
-    
-    for message in st.session_state.chat_history:
-        with st.chat_message(message["role"]):
-            st.write(message["content"])
 
 # ============================================================================
 # FOOTER
 # ============================================================================
 
 st.markdown("---")
-col1, col2, col3 = st.columns(3)
+col1, col2 = st.columns(2)
 
 with col1:
-    st.caption("📚 Knowledge Base")
+    st.caption("🚀 Made in Clockwork-Pilot")
 with col2:
-    st.caption("💬 Powered by Claude")
-with col3:
-    st.caption("🚀 Interview Prep 2026")
-
+    st.caption('')
