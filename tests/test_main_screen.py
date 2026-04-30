@@ -28,7 +28,7 @@ class TestSidebar:
             with open(INDEX_FILE) as f:
                 expected = json.load(f)["label"]
         else:
-            expected = "Interview Prep"  # app default when file is missing
+            expected = "Interview Prep 2026"  # app default when file is missing
         app.run()
         rendered = [str(t.value) for t in app.sidebar.title]
         assert expected in rendered, (
@@ -66,7 +66,8 @@ class TestFooter:
 
     def test_footer_renders(self, app):
         app.run()
-        assert len(app.columns) > 0
+        # Sidebar expanders (Submit + About) serve as the page footer
+        assert len(app.sidebar.expander) >= 2
 
 
 class TestElementIdentifiers:

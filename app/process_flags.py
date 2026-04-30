@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Process flagged items: run Claude to improve flagged metadata in superset.k.json."""
+"""Process flagged items: run Claude to improve or create questions in superset.k.json."""
 import json
 import os
 import subprocess
@@ -8,6 +8,17 @@ import sys
 PROJECT_ROOT = os.getenv("PROJECT_ROOT", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 FLAGGED_PATH = os.path.join(PROJECT_ROOT, "prep", "flagged.k.json")
 PATCH_TOOL = "/plugin/bin/patch-knowledge-document"
+
+_STRUCTURE_CONTEXT = """
+superset.k.json structure:
+- Root: Doc with children = sections (e.g. "system_design")
+- Section children: questions keyed q1, q2, q3... (q[0-9]+ only)
+- Question fields: label, description, metadata.tags, metadata.mermaid, metadata.answer
+- metadata.tags: comma-separated; each tag is max 2 words, at most one hyphen (e.g. "coding-pattern, language-python")
+- metadata.mermaid: valid Mermaid diagram (graph TD / flowchart LR syntax)
+- metadata.answer: comprehensive Markdown answer (headers, bullets, examples, trade-offs)
+- metadata.python / .js / .cc / .rust / .yaml / .go: code examples per language
+""".strip()
 
 
 def _in_docker() -> bool:
@@ -44,9 +55,9 @@ def _remove_processed(keys: list) -> None:
         _patch(ops)
 
 
-def _build_prompt(items: list) -> str:
+def _build_fix_section(fix_items: list) -> str:
     lines = []
-    for item in items:
+    for item in fix_items:
         section_id = item["id"]
         question_id = item["label"]
         fix_keys = [k for k, v in (item.get("metadata") or {}).items()
@@ -56,31 +67,74 @@ def _build_prompt(items: list) -> str:
     topic_list = "\n".join(lines)
 
     return f"""
-Load y2 plugin skill knowledge_document_tools.
+## Task A — Fix existing questions
 
 Improve the following questions in prep/superset.k.json:
 
 {topic_list}
 
-superset.k.json structure:
-- Root: Doc with children = sections (e.g. "system_design")
-- Section children: questions keyed q1, q2, q3... (q[0-9]+ only)
-- Question fields: label, description, metadata.tags, metadata.mermaid, metadata.answer
-- metadata.tags: comma-separated, each tag has at most one hyphen, max 3 words per tag
-- metadata.mermaid: valid Mermaid diagram (graph TD / flowchart LR syntax)
-- metadata.answer: comprehensive Markdown answer (headers, bullets, examples, trade-offs)
-- metadata.python / .js / .cc / .rust / .yaml / .go: code examples per language
+For each listed question, create or update EVERY metadata key that appears after "fix:" in that line:
+- mermaid: correct, informative Mermaid flowchart illustrating the topic
+- answer: thorough Markdown answer with headers, bullet points, examples and trade-offs
+- tags: comma-separated; each tag is max 2 words, at most one hyphen (e.g. "coding-pattern, language-python")
+- python / js / cc / rust / yaml / go: code example for the respective language
 
-For each listed question:
-1. Generate high-quality content for each field marked "fix":
-   - mermaid: correct, informative Mermaid flowchart illustrating the topic
-   - answer: thorough Markdown answer with headers, bullet points, examples and trade-offs
-   - tags: valid comma-separated tags (one-hyphen, ≤3-word rule)
-2. If no code examples exist yet, add relevant ones from: python, js, cc, rust, yaml, go
-3. Update the question in prep/superset.k.json using patch-knowledge-document
-
-Do not change any other fields, question keys, section keys, or top-level structure.
+Rules:
+1. Only touch the keys listed for that specific question — do not modify other fields.
+2. If a listed key is a code language (python, js, cc, rust, yaml, go) and no other code examples exist yet, also add the remaining languages from that set.
+3. Update the question in prep/superset.k.json using patch-knowledge-document for each change.
 """.strip()
+
+
+def _build_create_section(create_items: list) -> str:
+    lines = []
+    for item in create_items:
+        lines.append(f"- \"{item['label']}\"")
+
+    topic_list = "\n".join(lines)
+
+    return f"""
+## Task B — Create new questions
+
+Add the following new questions to the most relevant section in prep/superset.k.json:
+
+{topic_list}
+
+For each new question:
+1. Choose the best existing section (e.g. coding_patterns, system_design, infra_devops, etc.).
+2. Determine the next available question key in that section (q[N+1]).
+3. Create a complete question entry with ALL fields:
+   - label: the question text as provided
+   - description: one concise sentence describing what the question covers
+   - metadata.tags: comma-separated; each tag is max 2 words, at most one hyphen (e.g. "coding-pattern, language-python")
+   - metadata.answer: thorough Markdown answer with headers, bullet points, examples and trade-offs
+   - metadata.mermaid: correct Mermaid flowchart illustrating the topic
+   - metadata.python, .js, .cc, .rust, .yaml, .go: working code examples for each language
+4. Add the question using patch-knowledge-document with op "add" at the correct path.
+
+Do not create new sections. Do not modify existing questions.
+""".strip()
+
+
+def _build_prompt(fix_items: list, create_items: list) -> str:
+    parts = [
+        "Load y2 plugin skill knowledge_document_tools.",
+        "",
+        _STRUCTURE_CONTEXT,
+        "",
+    ]
+
+    if fix_items:
+        parts.append(_build_fix_section(fix_items))
+
+    if create_items:
+        if fix_items:
+            parts.append("")
+        parts.append(_build_create_section(create_items))
+
+    parts.append("\nDo not change any other fields, question keys, section keys, or top-level structure.")
+
+    return "\n".join(parts).strip()
 
 
 if not _in_docker():
@@ -100,7 +154,10 @@ if not pending:
 
 _mark_in_progress(list(pending.keys()))
 
-prompt = _build_prompt(list(pending.values()))
+fix_items = [v for v in pending.values() if not v.get("id", "").startswith("new_question_")]
+create_items = [v for v in pending.values() if v.get("id", "").startswith("new_question_")]
+
+prompt = _build_prompt(fix_items, create_items)
 
 result = subprocess.run(
     ["claude", "--dangerously-skip-permissions", "--model", "claude-haiku-4-5",

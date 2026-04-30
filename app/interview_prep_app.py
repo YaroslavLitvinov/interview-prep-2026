@@ -6,6 +6,7 @@ import sys
 import json
 import re
 import threading
+import time
 
 # Make locally-installed deps importable (pip install --target=.deps)
 _DEPS = os.path.join(os.getenv("PROJECT_ROOT", os.getcwd()), ".deps")
@@ -16,10 +17,11 @@ if os.path.isdir(_DEPS) and _DEPS not in sys.path:
 # Get PROJECT_ROOT from environment, fallback to current working directory
 PROJECT_ROOT = os.getenv('PROJECT_ROOT', os.getcwd())
 DEBUG = os.getenv('DEBUG', '').lower() == '1'
+APP_TITLE = "Interview Prep 2026"
 
 # Page configuration
 st.set_page_config(
-    page_title="Interview Prep 2026",
+    page_title=APP_TITLE,
     page_icon="📚",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -161,6 +163,7 @@ def read_markdown(file_path):
 
 
 # Helper function to extract and organize tags from knowledge document
+@st.cache_data(show_spinner=False)
 def get_topics(json_file_path, tag=None):
     """
     Get topics (questions) from knowledge document filtered by tag.
@@ -229,6 +232,7 @@ def get_topics(json_file_path, tag=None):
         return []
 
 
+@st.cache_data(show_spinner=False)
 def get_tags(json_file_path, tag=None):
     """
     Extract tags from knowledge document with hierarchical filtering.
@@ -453,25 +457,66 @@ def flag_item(section_id: str, question_id: str, metadata_key: str, flagged_path
         st.toast(f"❌ {e}")
 
 
+def submit_new_question(question_text: str, flagged_path: str = None) -> None:
+    if flagged_path is None:
+        flagged_path = os.path.join(PROJECT_ROOT, "prep", "flagged.k.json")
+    try:
+        if not os.path.exists(flagged_path):
+            subprocess.run(
+                ["/plugin/bin/create-knowledge-document", "Doc", flagged_path],
+                check=True, capture_output=True,
+            )
+        with open(flagged_path, 'r') as f:
+            data = json.load(f)
+
+        children = data.get('children') or {}
+        num = sum(1 for k in children if k.startswith("add_new_topic")) + 1
+        child_key = f"add_new_topic_{num}"
+
+        patch = []
+        if data.get('children') is None:
+            patch.append({"op": "add", "path": "/children", "value": {}})
+        patch.append({"op": "add", "path": f"/children/{child_key}", "value": {
+            "type": "Doc", "model_version": 1,
+            "id": f"new_question_{num}",
+            "label": question_text,
+            "metadata": {"answer": "create"},
+        }})
+
+        result = subprocess.run(
+            ["/plugin/bin/patch-knowledge-document", flagged_path, json.dumps(patch)],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            st.toast("✅ Question submitted!")
+            smart_flags_handler()
+        else:
+            st.toast(f"❌ {result.stderr.strip()}")
+    except Exception as e:
+        st.toast(f"❌ {e}")
+
+
 _flags_timer: threading.Timer | None = None
-_superset_mtime: float = 0.0
 _superset_changed = threading.Event()
 
 
 def _watch_superset(path: str, interval: float = 2.0) -> None:
-    global _superset_mtime
+    mtime = 0.0
     while True:
         try:
-            mtime = os.path.getmtime(path)
-            if mtime != _superset_mtime:
-                if _superset_mtime != 0.0:
+            new_mtime = os.path.getmtime(path)
+            if new_mtime != mtime:
+                if mtime != 0.0:
+                    get_topics.clear()
+                    get_tags.clear()
                     _superset_changed.set()
-                _superset_mtime = mtime
+                mtime = new_mtime
         except OSError:
             pass
-        threading.Event().wait(interval)
+        time.sleep(interval)
 
 
+@st.cache_resource
 def _start_superset_watcher(path: str) -> None:
     t = threading.Thread(target=_watch_superset, args=(path,), daemon=True)
     t.start()
@@ -480,7 +525,7 @@ def _start_superset_watcher(path: str) -> None:
 _start_superset_watcher(os.path.join(PROJECT_ROOT, "prep", "superset.k.json"))
 
 
-def smart_flags_handler(debounce: float = 5.0) -> None:
+def smart_flags_handler(debounce: float = 10.0) -> None:
     global _flags_timer
     if _flags_timer is not None:
         _flags_timer.cancel()
@@ -511,7 +556,7 @@ superset_path = os.path.join(PROJECT_ROOT, "prep", "superset.k.json")
 index_path = os.path.join(PROJECT_ROOT, "Interview-Prep-INDEX.k.json")
 
 # Get sidebar title from index file if it exists
-sidebar_title = "Interview Prep"
+sidebar_title = APP_TITLE
 if os.path.exists(index_path):
     try:
         with open(index_path, 'r') as f:
@@ -528,21 +573,29 @@ with st.sidebar.container(border=True):
     st.markdown('<div data-testid="tags-cloud-container"></div>', unsafe_allow_html=True)
     st.markdown("**🏷️ Tags**")
 
-    # Restore persisted selections from URL: format ?q=parent.child.N or ?q=parent.N
-    # N is 1-based (matches the displayed counter); absent means 1 (first topic).
+    # Restore persisted selections from URL.
+    # Formats: ?q=parent.child.N  ?q=parent.N  ?q=N (no-tag, index only)  ?s=searchterm
+    _qp_search = st.query_params.get("s") or ""
     _qp_val = st.query_params.get("q") or ""
-    _qp_parts = _qp_val.split(".") if _qp_val else []
-    _qp_parent = _qp_parts[0] if len(_qp_parts) >= 1 else None
-    # Second segment: numeric → 1-based index (no child); alphabetic → child tag
-    if len(_qp_parts) >= 2 and _qp_parts[1].lstrip("-").isdigit():
+
+    # Pure number → no tag selected, just a topic index
+    if _qp_val.lstrip("-").isdigit():
+        _qp_parent = None
         _qp_child = None
-        _qp_topic_idx = max(0, int(_qp_parts[1]) - 1)
+        _qp_topic_idx = max(0, int(_qp_val) - 1)
     else:
-        _qp_child = _qp_parts[1] if len(_qp_parts) >= 2 else None
-        try:
-            _qp_topic_idx = max(0, int(_qp_parts[2]) - 1) if len(_qp_parts) >= 3 else 0
-        except (ValueError, TypeError):
-            _qp_topic_idx = 0
+        _qp_parts = _qp_val.split(".") if _qp_val else []
+        _qp_parent = _qp_parts[0] if len(_qp_parts) >= 1 else None
+        # Second segment: numeric → 1-based index (no child); alphabetic → child tag
+        if len(_qp_parts) >= 2 and _qp_parts[1].lstrip("-").isdigit():
+            _qp_child = None
+            _qp_topic_idx = max(0, int(_qp_parts[1]) - 1)
+        else:
+            _qp_child = _qp_parts[1] if len(_qp_parts) >= 2 else None
+            try:
+                _qp_topic_idx = max(0, int(_qp_parts[2]) - 1) if len(_qp_parts) >= 3 else 0
+            except (ValueError, TypeError):
+                _qp_topic_idx = 0
 
     sel_parent = None
     sel_child = None
@@ -592,17 +645,42 @@ if _tag_changed:
     st.session_state.pop("selected_topic_tag", None)
     st.session_state.pop("selected_topic_idx", None)
 
-# Topics pane — filtered by active tag, or all topics (max 20) when no tag selected
+# Restore search term from URL on first load (before the widget is instantiated)
+if _qp_search and "tag_search_raw" not in st.session_state:
+    st.session_state["tag_search_raw"] = _qp_search
+
+# Topics pane — search input at top; list shows search results or tag-filtered topics
 with st.sidebar.container(border=True):
-    _topics = get_topics(superset_path, _active_tag)
-    if _active_tag:
-        _tag_disp = _active_tag.replace("-", " → ")
-        st.markdown(f"**📋 {_tag_disp}** `{len(_topics)}`")
+    _search_raw = st.text_input(
+        "Search",
+        key="tag_search_raw",
+        label_visibility="collapsed",
+        placeholder="🔍 Question or tag keyword…",
+    )
+
+    _search = _search_raw.strip().lower()
+
+    if _search and os.path.exists(superset_path):
+        # Search mode: filter all topics by label or tags
+        _all_topics = get_topics(superset_path)
+        _topics = [
+            t for t in _all_topics
+            if _search in t.get("label", "").lower()
+            or _search in t.get("tags", "").lower()
+        ]
+        _header = f"**🔍** `{len(_topics)}` result(s)"
     else:
-        st.markdown(f"**📋 All Topics** `{len(_topics)}`")
+        # Normal mode: filter by active tag
+        _topics = get_topics(superset_path, _active_tag)
+        if _active_tag:
+            _header = f"**📋 {_active_tag.replace('-', ' → ')}** `{len(_topics)}`"
+        else:
+            _header = f"**📋 All Topics** `{len(_topics)}`"
+
+    st.markdown(_header)
 
     if _topics:
-        _radio_key = f"topic_radio_{_active_tag}"
+        _radio_key = f"topic_radio_{_search or _active_tag}"
         _sel_topic_label = st.session_state.get("selected_topic", {}).get("label", "")
 
         # If Prev/Next requested a programmatic jump, pre-set the radio key
@@ -611,16 +689,18 @@ with st.sidebar.container(border=True):
         if _pending is not None:
             st.session_state[_radio_key] = _pending
 
-        # Compute fallback index for the case the key is not yet in session state.
-        # _prev_active_tag is None only on the very first render (page load/reload),
-        # where we restore from URL. Any other tag change is a user interaction → reset to 0.
-        if _tag_changed or not _sel_topic_label:
-            _is_url_restore = _tag_changed and _prev_active_tag is None
-            _radio_idx = min(_qp_topic_idx, len(_topics) - 1) if (not _tag_changed or _is_url_restore) else 0
+        if not _search:
+            # Compute fallback index for tag navigation (URL restore / tag change)
+            if _tag_changed or not _sel_topic_label:
+                _is_url_restore = _tag_changed and _prev_active_tag is None
+                _radio_idx = min(_qp_topic_idx, len(_topics) - 1) if (not _tag_changed or _is_url_restore) else 0
+            else:
+                _radio_idx = next(
+                    (i for i, t in enumerate(_topics) if t["label"] == _sel_topic_label), 0,
+                )
         else:
             _radio_idx = next(
-                (i for i, t in enumerate(_topics) if t["label"] == _sel_topic_label),
-                0,
+                (i for i, t in enumerate(_topics) if t["label"] == _sel_topic_label), 0,
             )
 
         _chosen = st.radio(
@@ -634,34 +714,58 @@ with st.sidebar.container(border=True):
         if _chosen_topic:
             _chosen_idx = _topics.index(_chosen_topic)
             st.session_state["selected_topic"] = _chosen_topic
-            st.session_state["selected_topic_tag"] = _active_tag
+            st.session_state["selected_topic_tag"] = (
+                _chosen_topic.get("tags", "").split(",")[0].strip() if _search else _active_tag
+            )
             st.session_state["selected_topic_idx"] = _chosen_idx
+    elif _search:
+        st.caption(f"No results for `{_search}`")
 
 
-# Sync full navigation state to URL as ?q=parent.child.idx or ?q=parent.idx
+# Sync full navigation state to URL.
+# ?s=term when search active; ?q=parent.child.N / ?q=parent.N / ?q=N otherwise.
 def _build_nav_q() -> str | None:
+    idx = st.session_state.get("selected_topic_idx")
     if not sel_parent:
-        return None
+        # No tag: encode bare index so the question survives a reload
+        return str(idx + 1) if idx else None
     parts = [sel_parent]
     if sel_child:
         parts.append(sel_child)
-    idx = st.session_state.get("selected_topic_idx")
-    if idx:  # omit when 0 (1-based position 1 = default, no need to show)
+    if idx:
         parts.append(str(idx + 1))
     return ".".join(parts)
 
 
 _nav_q = _build_nav_q()
 st.query_params.clear()
-if _nav_q:
+if _search:
+    st.query_params["s"] = _search
+elif _nav_q:
     st.query_params["q"] = _nav_q
 
 st.sidebar.markdown("---")
 
-# Info section
+with st.sidebar.expander("✏️ Submit a Question"):
+    _submit_count = st.session_state.get("_submit_count", 0)
+    _q_text = st.text_area(
+        "Question",
+        height=120,
+        key=f"new_question_input_{_submit_count}",
+        label_visibility="collapsed",
+        placeholder="Enter a question to add to the knowledge base...",
+    )
+    if st.button("Submit", key="submit_question_btn"):
+        if _q_text.strip():
+            submit_new_question(_q_text.strip())
+            st.session_state["_submit_count"] = _submit_count + 1
+            st.rerun()
+        else:
+            st.toast("⚠️ Please enter a question first")
+
 with st.sidebar.expander("ℹ️ About"):
-    st.write("""
-    **Interview Prep Knowledge Base**
+    st.write(f"""
+    **{APP_TITLE} Knowledge Base**
 
     Comprehensive preparation for 2026 interviews:
     - System design fundamentals
@@ -680,7 +784,7 @@ with st.sidebar.expander("ℹ️ About"):
 # ============================================================================
 
 # Title always at top
-st.title("📚 Interview Prep 2026")
+st.title(f"📚 {APP_TITLE}")
 st.markdown("---")
 
 # Display selected topic from tags navigation
@@ -857,9 +961,4 @@ else:
 # ============================================================================
 
 st.markdown("---")
-col1, col2 = st.columns(2)
-
-with col1:
-    st.caption("🚀 Created with Clockwork-Pilot")
-with col2:
-    st.caption('Using Streamlit')
+st.caption("🚀 Created with Clockwork-Pilot")
