@@ -1,9 +1,11 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import os
 import subprocess
 import sys
 import json
 import re
+import threading
 
 # Make locally-installed deps importable (pip install --target=.deps)
 _DEPS = os.path.join(os.getenv("PROJECT_ROOT", os.getcwd()), ".deps")
@@ -39,51 +41,41 @@ st.markdown("""
     .main { padding: 2rem; }
     .stTabs [data-baseweb="tab-list"] button { font-weight: bold; }
     .stChatMessage { border-radius: 0.5rem; padding: 1rem; }
-    /* Compact sidebar spacing only — no layout overrides that break widgets */
     [data-testid="stSidebarContent"] { gap: 0.25rem !important; }
     [data-testid="stSidebarContent"] .stExpander { margin: 0 !important; }
     [data-testid="stSidebarContent"] details { margin: 0 !important; padding: 0 !important; }
     [data-testid="stSidebarContent"] .streamlit-expanderContent { gap: 0.25rem !important; }
+    .st-key-mermaid-controls { flex-direction: row !important; align-items: center; gap: 0.5rem; }
+    .st-key-section-header-mermaid, .st-key-section-header-answer, .st-key-section-header-code { flex-direction: row !important; align-items: center; }
+    .st-key-section-header-mermaid > div:last-child, .st-key-section-header-answer > div:last-child, .st-key-section-header-code > div:last-child { margin-left: auto; }
+    .st-key-nav-controls, .st-key-nav-controls-search { flex-direction: row !important; align-items: center; }
+    .st-key-nav-controls > div:nth-child(2), .st-key-nav-controls-search > div:nth-child(2) { margin: 0 auto; white-space: nowrap; }
 </style>
-<script>
-// Inject data-testid attributes into rendered elements
-setTimeout(() => {
-    // Navigation radio - find by aria-label or content
-    document.querySelectorAll('[data-baseweb="radio"]').forEach(el => {
-        el.setAttribute('data-testid', 'nav-section');
-    });
-
-    // Chat input
-    const chatInput = document.querySelector('input[placeholder*="Ask about"]');
-    if (chatInput) {
-        chatInput.setAttribute('data-testid', 'chat-input');
-        chatInput.parentElement?.setAttribute('data-testid', 'chat-input-container');
-    }
-
-    // Send button (primary button)
-    document.querySelectorAll('button[kind="primary"]').forEach(btn => {
-        if (btn.textContent.includes('Send')) {
-            btn.setAttribute('data-testid', 'send-button');
-        }
-    });
-
-    // Show chat history checkbox
-    document.querySelectorAll('input[type="checkbox"]').forEach((cb, idx) => {
-        if (cb.nextSibling?.textContent?.includes('Show chat history')) {
-            cb.setAttribute('data-testid', 'show-chat-history');
-        }
-        if (cb.nextSibling?.textContent?.includes('Dark mode')) {
-            cb.setAttribute('data-testid', 'dark-mode');
-        }
-    });
-
-    // Font size slider
-    document.querySelectorAll('input[type="range"]').forEach(slider => {
-        slider.setAttribute('data-testid', 'font-size');
-    });
-}, 100);
-</script>
 """, unsafe_allow_html=True)
+
+components.html("""
+<script>
+(function() {
+    const p = window.parent;
+    if (p._swipeAttached) return;
+    p._swipeAttached = true;
+    let _x0 = 0, _y0 = 0;
+    p.document.addEventListener('touchstart', function(e) {
+        _x0 = e.touches[0].clientX;
+        _y0 = e.touches[0].clientY;
+    }, { passive: true });
+    p.document.addEventListener('touchend', function(e) {
+        const dx = e.changedTouches[0].clientX - _x0;
+        const dy = e.changedTouches[0].clientY - _y0;
+        if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+        const sel = dx < 0
+            ? '.st-key-btn-next button, .st-key-next-search button'
+            : '.st-key-btn-prev button, .st-key-prev-search button';
+        p.document.querySelector(sel)?.click();
+    }, { passive: true });
+})();
+</script>
+""", height=0)
 
 # Initialize session state
 if "chat_history" not in st.session_state:
@@ -98,14 +90,12 @@ if "selected_subtopic" not in st.session_state:
     st.session_state.selected_subtopic = None
 if "selected_item" not in st.session_state:
     st.session_state.selected_item = None
-if "selected_begin_page" not in st.session_state:
-    st.session_state.selected_begin_page = None
-if "selected_end_page" not in st.session_state:
-    st.session_state.selected_end_page = None
+
 if "_active_tag" not in st.session_state:
     st.session_state["_active_tag"] = None
 
 _MERMAID_DIRECTIONS = ["TD", "LR", "BT", "RL"]
+
 
 def render_mermaid(code: str, key: str = "mermaid") -> None:
     from streamlit_mermaid import st_mermaid
@@ -123,23 +113,29 @@ def render_mermaid(code: str, key: str = "mermaid") -> None:
     if _lock_key not in st.session_state:
         st.session_state[_lock_key] = True  # locked by default
 
-    # Single pills row: directions + 🔒 lock toggle
-    _default_sel = [st.session_state[_orient_key]]
-    if st.session_state[_lock_key]:
-        _default_sel.append("🔒")
+    # Reset fixed widget keys when diagram key changes (topic navigation)
+    if st.session_state.get("_mermaid_widget_key") != key:
+        st.session_state.pop("mermaid-lock-control", None)
+        st.session_state.pop("mermaid-dir-controls", None)
+        st.session_state["_mermaid_widget_key"] = key
 
-    _sel = st.pills(
-        "Controls",
-        _MERMAID_DIRECTIONS + ["🔒"],
-        default=_default_sel,
-        selection_mode="multi",
-        key=f"_mermaid_pills_{key}",
-        label_visibility="collapsed",
-    )
-    _sel = _sel or []
-    _sel_dirs = [o for o in _sel if o in _MERMAID_DIRECTIONS]
-    _dir = _sel_dirs[0] if _sel_dirs else st.session_state[_orient_key]
-    _locked = "🔒" in _sel
+    with st.container(key="mermaid-controls"):
+        _locked_sel = st.pills(
+            "Lock", ["🔒"],
+            default="🔒" if st.session_state[_lock_key] else None,
+            selection_mode="single",
+            key="mermaid-lock-control",
+            label_visibility="collapsed",
+        )
+        _dir_sel = st.pills(
+            "Direction", _MERMAID_DIRECTIONS,
+            default=st.session_state[_orient_key],
+            selection_mode="single",
+            key="mermaid-dir-controls",
+            label_visibility="collapsed",
+        )
+    _locked = _locked_sel == "🔒"
+    _dir = _dir_sel or st.session_state[_orient_key]
     st.session_state[_orient_key] = _dir
     st.session_state[_lock_key] = _locked
 
@@ -162,6 +158,7 @@ def read_markdown(file_path):
             return f.read()
     except FileNotFoundError:
         return f"❌ File not found: {file_path}"
+
 
 # Helper function to extract and organize tags from knowledge document
 def get_topics(json_file_path, tag=None):
@@ -226,8 +223,7 @@ def get_topics(json_file_path, tag=None):
                                     })
                                     break
 
-        # Return max 20 topics
-        return topics[:20]
+        return topics
 
     except (FileNotFoundError, json.JSONDecodeError):
         return []
@@ -294,32 +290,6 @@ def get_tags(json_file_path, tag=None):
     except json.JSONDecodeError:
         return []
 
-# Helper function to extract PDF content
-def extract_pdf_content(file_path, begin_page=None, end_page=None):
-    """Extract text from PDF file for given page range"""
-    try:
-        from pypdf import PdfReader
-        reader = PdfReader(file_path)
-
-        # Default to all pages if range not specified
-        start = (begin_page - 1) if begin_page else 0
-        end = end_page if end_page else len(reader.pages)
-
-        # Clamp to valid range
-        start = max(0, min(start, len(reader.pages) - 1))
-        end = min(end, len(reader.pages))
-
-        text = ""
-        for page_num in range(start, end):
-            page = reader.pages[page_num]
-            page_text = page.extract_text() or ""
-            text += f"\n---\n**Page {page_num + 1}**\n---\n{page_text}"
-
-        return text if text.strip() else f"❌ No content found on pages {begin_page}-{end_page}"
-    except ImportError:
-        return "❌ pypdf not installed. Run: pip install pypdf"
-    except Exception as e:
-        return f"❌ Error reading PDF: {str(e)}"
 
 # Helper function to extract file path from markdown link
 def extract_file_path(description):
@@ -328,6 +298,7 @@ def extract_file_path(description):
     if match:
         return match.group(1)
     return None
+
 
 # Helper to flatten tree structure
 def flatten_tree(tree, items=None):
@@ -340,6 +311,7 @@ def flatten_tree(tree, items=None):
         if node_data.get("children"):
             flatten_tree(node_data["children"], items)
     return items
+
 
 # Source of truth for knowledge structure
 def get_knowledge_structure(index_file):
@@ -374,6 +346,7 @@ def get_knowledge_structure(index_file):
         st.error(f"❌ Failed to load knowledge structure: {e}")
         return {"label": "", "tree": {}, "flat": {}}
 
+
 def build_tree_structure(node, parent_key="", inherited_path=None):
     """Build tree containing nodes with metadata.resource_location.
 
@@ -396,8 +369,6 @@ def build_tree_structure(node, parent_key="", inherited_path=None):
             continue
         child_metadata = child_node.get('metadata') or {}
         child_path = child_metadata.get('resource_location')
-        begin = child_metadata.get('begin_page')
-        end = child_metadata.get('end_page')
 
         # Inline children from the linked file when it's another .k.json
         nested = build_tree_structure(child_node, child_label, child_path or inherited_path)
@@ -414,18 +385,11 @@ def build_tree_structure(node, parent_key="", inherited_path=None):
             except (FileNotFoundError, json.JSONDecodeError):
                 pass
 
-        # Include this node if it has a destination, page range, or children
-        has_destination = bool(child_path)
-        has_pages = begin is not None and end is not None
-        if has_destination or has_pages or nested:
-            # Use own path, or inherited path from parent .k.json
+        if bool(child_path) or nested:
             abs_path = os.path.join(PROJECT_ROOT, child_path) if child_path else (
                 os.path.join(PROJECT_ROOT, inherited_path) if inherited_path else None
             )
-            entry = {"path": abs_path, "children": nested}
-            if has_pages:
-                entry["pages"] = (begin, end)
-            structure[child_label] = entry
+            structure[child_label] = {"path": abs_path, "children": nested}
 
     return structure
 
@@ -448,6 +412,95 @@ def ask_claude(question: str) -> str:
     except Exception as e:
         return f"❌ Error: {str(e)}"
 
+
+# Helper function to flag a question metadata key
+def flag_item(section_id: str, question_id: str, metadata_key: str, flagged_path: str = None) -> None:
+    if flagged_path is None:
+        flagged_path = os.path.join(PROJECT_ROOT, "prep", "flagged.k.json")
+    child_key = f"{section_id}_{question_id}"
+    try:
+        if not os.path.exists(flagged_path):
+            subprocess.run(
+                ["/plugin/bin/create-knowledge-document", "Doc", flagged_path],
+                check=True, capture_output=True,
+            )
+        with open(flagged_path, 'r') as f:
+            data = json.load(f)
+
+        children = data.get('children') or {}
+        patch = []
+        if data.get('children') is None:
+            patch.append({"op": "add", "path": "/children", "value": {}})
+        if child_key in children:
+            patch.append({"op": "add", "path": f"/children/{child_key}/metadata/{metadata_key}", "value": "fix"})
+        else:
+            patch.append({"op": "add", "path": f"/children/{child_key}", "value": {
+                "type": "Doc", "model_version": 1,
+                "id": section_id, "label": question_id,
+                "metadata": {metadata_key: "fix"},
+            }})
+
+        result = subprocess.run(
+            ["/plugin/bin/patch-knowledge-document", flagged_path, json.dumps(patch)],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            st.toast(f"🚩 Flagged {metadata_key}")
+            smart_flags_handler()
+        else:
+            st.toast(f"❌ {result.stderr.strip()}")
+    except Exception as e:
+        st.toast(f"❌ {e}")
+
+
+_flags_timer: threading.Timer | None = None
+_superset_mtime: float = 0.0
+_superset_changed = threading.Event()
+
+
+def _watch_superset(path: str, interval: float = 2.0) -> None:
+    global _superset_mtime
+    while True:
+        try:
+            mtime = os.path.getmtime(path)
+            if mtime != _superset_mtime:
+                if _superset_mtime != 0.0:
+                    _superset_changed.set()
+                _superset_mtime = mtime
+        except OSError:
+            pass
+        threading.Event().wait(interval)
+
+
+def _start_superset_watcher(path: str) -> None:
+    t = threading.Thread(target=_watch_superset, args=(path,), daemon=True)
+    t.start()
+
+
+_start_superset_watcher(os.path.join(PROJECT_ROOT, "prep", "superset.k.json"))
+
+
+def smart_flags_handler(debounce: float = 5.0) -> None:
+    global _flags_timer
+    if _flags_timer is not None:
+        _flags_timer.cancel()
+    _flags_timer = threading.Timer(debounce, _run_process_flags)
+    _flags_timer.daemon = True
+    _flags_timer.start()
+
+
+def _run_process_flags() -> None:
+    script = os.path.join(os.path.dirname(__file__), "process_flags.py")
+    subprocess.Popen(
+        [sys.executable, script],
+        env={**os.environ, "PROJECT_ROOT": PROJECT_ROOT},
+    )
+
+
+if _superset_changed.is_set():
+    _superset_changed.clear()
+    st.rerun()
+
 # ============================================================================
 # SIDEBAR NAVIGATION - HIERARCHICAL TAGS FROM SUPERSET
 # ============================================================================
@@ -464,7 +517,7 @@ if os.path.exists(index_path):
         with open(index_path, 'r') as f:
             index_data = json.load(f)
             sidebar_title = index_data.get('label', sidebar_title)
-    except:
+    except Exception:
         pass
 
 st.sidebar.title(sidebar_title)
@@ -506,7 +559,6 @@ with st.sidebar.container(border=True):
                 default=_qp_parent if _qp_parent in root_tags else None,
             )
 
-
             if sel_parent:
                 child_tags = get_tags(superset_path, sel_parent)
                 if child_tags:
@@ -532,7 +584,8 @@ with st.sidebar.container(border=True):
 _active_tag = (
     f"{sel_parent}-{sel_child}" if sel_parent and sel_child else sel_parent
 )
-_tag_changed = st.session_state["_active_tag"] != _active_tag
+_prev_active_tag = st.session_state["_active_tag"]
+_tag_changed = _prev_active_tag != _active_tag
 if _tag_changed:
     st.session_state["_active_tag"] = _active_tag
     st.session_state.pop("selected_topic", None)
@@ -558,9 +611,12 @@ with st.sidebar.container(border=True):
         if _pending is not None:
             st.session_state[_radio_key] = _pending
 
-        # Compute fallback index for the case the key is not yet in session state
+        # Compute fallback index for the case the key is not yet in session state.
+        # _prev_active_tag is None only on the very first render (page load/reload),
+        # where we restore from URL. Any other tag change is a user interaction → reset to 0.
         if _tag_changed or not _sel_topic_label:
-            _radio_idx = 0 if _tag_changed else min(_qp_topic_idx, len(_topics) - 1)
+            _is_url_restore = _tag_changed and _prev_active_tag is None
+            _radio_idx = min(_qp_topic_idx, len(_topics) - 1) if (not _tag_changed or _is_url_restore) else 0
         else:
             _radio_idx = next(
                 (i for i, t in enumerate(_topics) if t["label"] == _sel_topic_label),
@@ -581,6 +637,7 @@ with st.sidebar.container(border=True):
             st.session_state["selected_topic_tag"] = _active_tag
             st.session_state["selected_topic_idx"] = _chosen_idx
 
+
 # Sync full navigation state to URL as ?q=parent.child.idx or ?q=parent.idx
 def _build_nav_q() -> str | None:
     if not sel_parent:
@@ -593,6 +650,7 @@ def _build_nav_q() -> str | None:
         parts.append(str(idx + 1))
     return ".".join(parts)
 
+
 _nav_q = _build_nav_q()
 st.query_params.clear()
 if _nav_q:
@@ -604,15 +662,15 @@ st.sidebar.markdown("---")
 with st.sidebar.expander("ℹ️ About"):
     st.write("""
     **Interview Prep Knowledge Base**
-    
+
     Comprehensive preparation for 2026 interviews:
     - System design fundamentals
     - Coding skills
     - Behavioral interview prep
     - etc
-    
+
     Curated by Claude Code Agent, organized by topic and tags for easy navigation.
-             
+
     Created with Clockwork-Pilot, using Streamlit.
     """)
 
@@ -628,8 +686,9 @@ st.markdown("---")
 # Display selected topic from tags navigation
 if "selected_topic" in st.session_state:
     topic = st.session_state.selected_topic
-    tag = st.session_state.get("selected_topic_tag") or _active_tag or "Topics"
-    st.header(f"📚 {tag.replace('-', ' → ').title()}")
+    tag = st.session_state.get("selected_topic_tag") or _active_tag
+    tag_display = tag.replace('-', ' → ').title() if tag else "All Topics"
+    st.header(f"📚 {tag_display}")
 
     # Prev / Next at the top so their position is stable regardless of content height
     if "selected_topic_idx" not in st.session_state:
@@ -644,13 +703,12 @@ if "selected_topic" in st.session_state:
             st.session_state["_pending_nav_label"] = new_topic["label"]
             st.rerun()
 
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("← Prev", use_container_width=True):
+        with st.container(key="nav-controls"):
+            if st.button("← Prev", key="btn-prev"):
                 if st.session_state.selected_topic_idx > 0:
                     _navigate(st.session_state.selected_topic_idx - 1)
-        with col2:
-            if st.button("Next →", use_container_width=True):
+            st.text(f"Q {st.session_state.selected_topic_idx + 1}/{len(topics)}")
+            if st.button("Next →", key="btn-next"):
                 if st.session_state.selected_topic_idx < len(topics) - 1:
                     _navigate(st.session_state.selected_topic_idx + 1)
 
@@ -667,13 +725,23 @@ if "selected_topic" in st.session_state:
             data = json.load(f)
 
         metadata = None
+        question_id = None
+        section_id = None
         for section_key, section in data.get('children', {}).items():
             for q_key, question in section.get('children', {}).items():
                 if question.get('label') == topic['label']:
                     metadata = question.get('metadata', {})
+                    question_id = question.get('id', q_key)
+                    section_id = section_key
                     break
 
         if metadata:
+
+            def _section_header(title: str, flag_key: str, meta_key: str):
+                with st.container(key=f"section-header-{meta_key}"):
+                    st.markdown(title)
+                    if st.button("🚩", key=flag_key, help=f"Flag {meta_key}"):
+                        flag_item(section_id, question_id, meta_key)
 
             if metadata.get('mermaid'):
                 st.markdown("### 📊 Diagram")
@@ -684,7 +752,7 @@ if "selected_topic" in st.session_state:
                     st.code(metadata['mermaid'], language='mermaid')
 
             if metadata.get('answer'):
-                st.markdown("### 📝 Answer")
+                _section_header("### 📝 Answer", "flag_answer", "answer")
                 st.markdown(metadata['answer'])
 
             _SKIP_KEYS = {'answer', 'mermaid', 'tags'}
@@ -693,49 +761,14 @@ if "selected_topic" in st.session_state:
                 if _mk in _SKIP_KEYS or not _mv:
                     continue
                 _lang = _LANG_MAP.get(_mk, _mk)
-                st.markdown(f"### 💻 {_mk.upper()}")
+                _section_header(f"### 💻 {_mk.upper()}", f"flag_{_mk}_{question_id}", _mk)
                 st.code(_mv, language=_lang)
 
     except Exception as e:
         st.error(f"Error loading question metadata: {e}")
 
-# Check if old-style indexed content is selected (for backwards compatibility with tests)
-if st.session_state.get("selected_main_topic") and st.session_state.get("selected_subtopic"):
-    # Old Interview-Prep-INDEX based navigation
-    main_topic = st.session_state.selected_main_topic
-    subtopic = st.session_state.selected_subtopic
-    item = st.session_state.get("selected_item", "")
-    nav_path = st.session_state.get("selected_nav_path", "")
-    begin_page = st.session_state.get("selected_begin_page", 1)
-    end_page = st.session_state.get("selected_end_page", None)
-
-    st.header(main_topic)
-    st.subheader(subtopic)
-    if item:
-        st.markdown(f"**{item}**")
-
-    st.markdown("---")
-
-    # Handle PDF resources
-    if nav_path and nav_path.endswith('.pdf'):
-        st.markdown(f"""
-        <div data-testid="pdf-resource-container" data-pdf="{nav_path}">
-        **📄 PDF Resource**
-
-        Pages {begin_page} to {end_page if end_page else 'end'}
-        </div>
-        """, unsafe_allow_html=True)
-
-        # Show PDF content if file exists
-        if os.path.exists(nav_path):
-            try:
-                pdf_text = extract_pdf_content(nav_path, begin_page, end_page)
-                st.markdown(pdf_text)
-            except Exception as e:
-                st.error(f"Error loading PDF: {e}")
-
 # Display based on tag selection (new superset navigation)
-elif "selected_parent_tag" in st.session_state and "selected_child" in st.session_state:
+if "selected_parent_tag" in st.session_state and "selected_child" in st.session_state:
     parent = st.session_state.selected_parent_tag
     child = st.session_state.selected_child
 
@@ -768,16 +801,13 @@ elif "selected_parent_tag" in st.session_state and "selected_child" in st.sessio
             if "current_question_idx" not in st.session_state:
                 st.session_state.current_question_idx = 0
 
-            col1, col2, col3 = st.columns([1, 1, 1])
-            with col1:
-                if st.button("← Prev", use_container_width=True):
+            with st.container(key="nav-controls-search"):
+                if st.button("← Prev", key="prev-search"):
                     if st.session_state.current_question_idx > 0:
                         st.session_state.current_question_idx -= 1
                         st.rerun()
-            with col2:
-                st.write(f"Q {st.session_state.current_question_idx + 1}/{len(questions_found)}")
-            with col3:
-                if st.button("Next →", use_container_width=True):
+                st.text(f"Q {st.session_state.current_question_idx + 1}/{len(questions_found)}")
+                if st.button("Next →", key="next-search"):
                     if st.session_state.current_question_idx < len(questions_found) - 1:
                         st.session_state.current_question_idx += 1
                         st.rerun()
@@ -830,6 +860,6 @@ st.markdown("---")
 col1, col2 = st.columns(2)
 
 with col1:
-    st.caption("🚀 Made in Clockwork-Pilot")
+    st.caption("🚀 Created with Clockwork-Pilot")
 with col2:
-    st.caption('')
+    st.caption('Using Streamlit')
