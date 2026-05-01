@@ -96,6 +96,32 @@
           "fails_count": 1
         }
       }
+    },
+    "metadata_keys_standardization": {
+      "type": "Feature",
+      "model_version": 1,
+      "id": "metadata_keys_standardization",
+      "description": "Standardize metadata keys: only metadata.code allowed, no separate language keys",
+      "goals": [
+        "Only metadata.code is supported for code content",
+        "No separate metadata keys for individual languages (python, javascript, rust, go, cpp, c, yaml, js, py, cc)",
+        "App only renders metadata.code field",
+        "Superset.k.json contains no separate language metadata keys"
+      ],
+      "constraints": {
+        "constraint_no_separate_language_keys": {
+          "id": "constraint_no_separate_language_keys",
+          "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json && invalid=$(jq '[.children // {} | to_entries[] | .value.children // {} | to_entries[] | select(.value.metadata != null) | .value.metadata | keys[] | select(. == \"python\" or . == \"javascript\" or . == \"rust\" or . == \"go\" or . == \"cpp\" or . == \"c\" or . == \"yaml\" or . == \"js\" or . == \"py\" or . == \"cc\" or . == \"code_python\" or . == \"code_javascript\" or . == \"code_rust\" or . == \"code_go\" or . == \"code_cpp\" or . == \"code_c\")] | length' $PROJECT_ROOT/prep/superset.k.json) && test \"$invalid\" -eq 0 || { echo \"Found separate language keys\"; exit 1; }",
+          "description": "Structural: no separate language metadata keys allowed (only metadata.code)",
+          "fails_count": 1
+        },
+        "constraint_app_handles_only_code": {
+          "id": "constraint_app_handles_only_code",
+          "cmd": "grep -q \"metadata.get(code)\" $PROJECT_ROOT/app/interview_prep_app.py && ! grep -q \"for lang in.*python.*javascript\" $PROJECT_ROOT/app/interview_prep_app.py || { echo \"App should only handle metadata.code\"; exit 1; }",
+          "description": "Behavioral: app must only render metadata.code, not separate language keys",
+          "fails_count": 1
+        }
+      }
     }
   }
 }

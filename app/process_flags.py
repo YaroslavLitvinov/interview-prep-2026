@@ -104,12 +104,12 @@ For each new question:
 1. Choose the best existing section (e.g. coding_patterns, system_design, infra_devops, etc.).
 2. Determine the next available question key in that section (q[N+1]).
 3. Create a complete question entry with ALL fields:
-   - label: the question text as provided
+   - label: refine the provided text into a clear, professional, and concise question label (do NOT use the exact provided text if it can be improved)
    - description: one concise sentence describing what the question covers
    - metadata.tags: comma-separated; each tag is max 2 words, at most one hyphen (e.g. "coding-pattern, language-python")
    - metadata.answer: thorough Markdown answer with headers, bullet points, examples and trade-offs
    - metadata.mermaid: correct Mermaid flowchart illustrating the topic
-   - metadata.python, .js, .cc, .rust, .yaml, .go: working code examples for each language
+   - metadata.code: working code example that demonstrates the concept
 4. Add the question using patch-knowledge-document with op "add" at the correct path.
 
 Do not create new sections. Do not modify existing questions.
@@ -138,10 +138,13 @@ def _build_prompt(fix_items: list, create_items: list) -> str:
 
 
 if not _in_docker():
+    print("⏭️  Not in Docker, skipping process_flags", file=sys.stderr)
     sys.exit(0)
 
+print("🔍 Loading flagged items...", file=sys.stderr)
 data = _load_flagged()
 children = data.get("children") or {}
+print(f"📋 Total items in flagged.k.json: {len(children)}", file=sys.stderr)
 
 # Pick items not already in progress
 pending = {
@@ -149,22 +152,43 @@ pending = {
     if not (v.get("metadata") or {}).get("in_progress")
 }
 
+print(f"⏳ Pending items (not in progress): {len(pending)}", file=sys.stderr)
+if pending:
+    for key, item in pending.items():
+        print(f"  - {key}: {item.get('label', 'N/A')}", file=sys.stderr)
+
 if not pending:
+    print("✅ No pending items to process", file=sys.stderr)
     sys.exit(0)
 
+print("📌 Marking items as in progress...", file=sys.stderr)
 _mark_in_progress(list(pending.keys()))
 
 fix_items = [v for v in pending.values() if not v.get("id", "").startswith("new_question_")]
 create_items = [v for v in pending.values() if v.get("id", "").startswith("new_question_")]
 
+print(f"🔧 Fix items: {len(fix_items)}", file=sys.stderr)
+print(f"✨ Create items: {len(create_items)}", file=sys.stderr)
+
+if create_items:
+    print("\n📝 New questions to create:", file=sys.stderr)
+    for item in create_items:
+        print(f"  - {item.get('label', 'N/A')}", file=sys.stderr)
+
 prompt = _build_prompt(fix_items, create_items)
+print(f"\n🤖 Prompt length: {len(prompt)} characters", file=sys.stderr)
+print(f"📤 Calling Claude CLI...", file=sys.stderr)
 
 result = subprocess.run(
     ["claude", "--dangerously-skip-permissions", "--model", "claude-haiku-4-5",
      "--plugin-dir", "/plugin", "-p", prompt],
     cwd=PROJECT_ROOT,
+    timeout=600,  # 10 minutes
 )
 
+print(f"\n✏️  Claude exit code: {result.returncode}", file=sys.stderr)
+print(f"🗑️  Removing processed items...", file=sys.stderr)
 _remove_processed(list(pending.keys()))
+print("✅ Done", file=sys.stderr)
 
 sys.exit(result.returncode)

@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import os
 import subprocess
 import sys
@@ -27,26 +26,12 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Test IDs mapping (for reference in tests and inspection)
-TEST_IDS = {
-    "nav_section": "nav-section",
-    "chat_input": "chat-input",
-    "send_button": "send-button",
-    "show_chat_history": "show-chat-history",
-    "font_size": "font-size",
-    "dark_mode": "dark-mode",
-}
-
 # Custom styling
 st.markdown("""
 <style>
     .main { padding: 2rem; }
     .stTabs [data-baseweb="tab-list"] button { font-weight: bold; }
     .stChatMessage { border-radius: 0.5rem; padding: 1rem; }
-    [data-testid="stSidebarContent"] { gap: 0.25rem !important; }
-    [data-testid="stSidebarContent"] .stExpander { margin: 0 !important; }
-    [data-testid="stSidebarContent"] details { margin: 0 !important; padding: 0 !important; }
-    [data-testid="stSidebarContent"] .streamlit-expanderContent { gap: 0.25rem !important; }
     .st-key-mermaid-controls { flex-direction: row !important; align-items: center; gap: 0.5rem; }
     .st-key-section-header-mermaid, .st-key-section-header-answer, .st-key-section-header-code { flex-direction: row !important; align-items: center; }
     .st-key-section-header-mermaid > div:last-child, .st-key-section-header-answer > div:last-child, .st-key-section-header-code > div:last-child { margin-left: auto; }
@@ -54,30 +39,6 @@ st.markdown("""
     .st-key-nav-controls > div:nth-child(2), .st-key-nav-controls-search > div:nth-child(2) { margin: 0 auto; white-space: nowrap; }
 </style>
 """, unsafe_allow_html=True)
-
-components.html("""
-<script>
-(function() {
-    const p = window.parent;
-    if (p._swipeAttached) return;
-    p._swipeAttached = true;
-    let _x0 = 0, _y0 = 0;
-    p.document.addEventListener('touchstart', function(e) {
-        _x0 = e.touches[0].clientX;
-        _y0 = e.touches[0].clientY;
-    }, { passive: true });
-    p.document.addEventListener('touchend', function(e) {
-        const dx = e.changedTouches[0].clientX - _x0;
-        const dy = e.changedTouches[0].clientY - _y0;
-        if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-        const sel = dx < 0
-            ? '.st-key-btn-next button, .st-key-next-search button'
-            : '.st-key-btn-prev button, .st-key-prev-search button';
-        p.document.querySelector(sel)?.click();
-    }, { passive: true });
-})();
-</script>
-""", height=0)
 
 # Initialize session state
 if "chat_history" not in st.session_state:
@@ -152,16 +113,6 @@ def render_mermaid(code: str, key: str = "mermaid") -> None:
     st_mermaid(_modified, pan=not _locked, zoom=not _locked, show_controls=False, key=key)
 
 
-# Helper function to read markdown files
-def read_markdown(file_path):
-    """Read and return markdown file content"""
-    try:
-        with open(file_path, "r") as f:
-            return f.read()
-    except FileNotFoundError:
-        return f"❌ File not found: {file_path}"
-
-
 # Helper function to extract and organize tags from knowledge document
 @st.cache_data(show_spinner=False)
 def get_topics(json_file_path, tag=None):
@@ -176,8 +127,7 @@ def get_topics(json_file_path, tag=None):
              - None - returns all topics without filtering by tag
 
     Returns:
-        List of topics (questions) as dicts with keys: label, description, section, tags
-        Max 20 topics returned.
+        List of topics (questions) as dicts with keys: label, description, section, tags.
     """
     try:
         with open(json_file_path, 'r') as f:
@@ -317,106 +267,6 @@ def flatten_tree(tree, items=None):
     return items
 
 
-# Source of truth for knowledge structure
-def get_knowledge_structure(index_file):
-    """Load and build complete knowledge structure from a .k.json index.
-
-    The companion .k.md home file is derived from the index file name
-    (e.g. Foo.k.json → Foo.k.md).
-
-    Args:
-        index_file: JSON index file name (relative to PROJECT_ROOT)
-
-    Returns:
-        dict with 'label' (root label), 'tree' (hierarchical), and
-        'flat' (all items with home)
-    """
-    index_path = os.path.join(PROJECT_ROOT, index_file)
-    home_file = index_file[:-len(".k.json")] + ".k.md" if index_file.endswith(".k.json") else index_file
-
-    try:
-        with open(index_path, 'r') as f:
-            index_data = json.load(f)
-
-        label = index_data.get("label", "")
-        tree = build_tree_structure(index_data, "", None)
-        flat = flatten_tree(tree)
-
-        home_path = os.path.join(PROJECT_ROOT, home_file)
-        flat_with_home = {"🏠 Home": home_path, **flat}
-
-        return {"label": label, "tree": tree, "flat": flat_with_home}
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        st.error(f"❌ Failed to load knowledge structure: {e}")
-        return {"label": "", "tree": {}, "flat": {}}
-
-
-def build_tree_structure(node, parent_key="", inherited_path=None):
-    """Build tree containing nodes with metadata.resource_location.
-
-    Walks the .k.json document and includes a node iff it has both a label
-    and a metadata.resource_location pointing somewhere. Descriptive nodes
-    without a destination are skipped.
-
-    When a node's resource_location points to another .k.json file, that
-    file is loaded and its own children are inlined as nested entries —
-    so the tree spans across linked knowledge files. Children inherit the
-    parent's resource_location if they don't have their own.
-    """
-    structure = {}
-
-    for key, child_node in (node.get('children') or {}).items():
-        if not isinstance(child_node, dict):
-            continue
-        child_label = child_node.get('label', '')
-        if not child_label:
-            continue
-        child_metadata = child_node.get('metadata') or {}
-        child_path = child_metadata.get('resource_location')
-
-        # Inline children from the linked file when it's another .k.json
-        nested = build_tree_structure(child_node, child_label, child_path or inherited_path)
-        linked_inherited_path = None
-        if child_path and child_path.endswith('.k.json'):
-            linked_abs = os.path.join(PROJECT_ROOT, child_path)
-            try:
-                with open(linked_abs) as lf:
-                    linked_doc = json.load(lf)
-                # Inherit the PDF path from the linked file's root metadata
-                linked_inherited_path = (linked_doc.get('metadata') or {}).get('resource_location')
-                linked_children = build_tree_structure(linked_doc, child_label, linked_inherited_path)
-                nested = {**nested, **linked_children}
-            except (FileNotFoundError, json.JSONDecodeError):
-                pass
-
-        if bool(child_path) or nested:
-            abs_path = os.path.join(PROJECT_ROOT, child_path) if child_path else (
-                os.path.join(PROJECT_ROOT, inherited_path) if inherited_path else None
-            )
-            structure[child_label] = {"path": abs_path, "children": nested}
-
-    return structure
-
-
-# Helper function to call Claude CLI
-def ask_claude(question: str) -> str:
-    """Call Claude CLI with a question"""
-    try:
-        result = subprocess.run(
-            ["claude", "-p", question],
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
-        return result.stdout if result.stdout else result.stderr
-    except subprocess.TimeoutExpired:
-        return "⏱️ Response timed out. Try a shorter question."
-    except FileNotFoundError:
-        return "❌ Claude CLI not found. Install with: pip install anthropic"
-    except Exception as e:
-        return f"❌ Error: {str(e)}"
-
-
 # Helper function to flag a question metadata key
 def flag_item(section_id: str, question_id: str, metadata_key: str, flagged_path: str = None) -> None:
     if flagged_path is None:
@@ -507,8 +357,35 @@ def _watch_superset(path: str, interval: float = 2.0) -> None:
             new_mtime = os.path.getmtime(path)
             if new_mtime != mtime:
                 if mtime != 0.0:
+                    try:
+                        # Get current topics before clearing cache
+                        prev_topics = {t['label']: hash(json.dumps(t, sort_keys=True))
+                                      for t in get_topics(path)}
+                    except Exception:
+                        prev_topics = {}
+
+                    # Clear cache
                     get_topics.clear()
                     get_tags.clear()
+
+                    try:
+                        # Get new topics after clearing
+                        new_topics = {t['label']: hash(json.dumps(t, sort_keys=True))
+                                     for t in get_topics(path)}
+
+                        # Find created (new topics) and updated (same label, different content)
+                        created = [label for label in new_topics if label not in prev_topics]
+                        updated = [label for label in prev_topics
+                                  if label in new_topics and prev_topics[label] != new_topics[label]]
+
+                        if created or updated:
+                            st.session_state["topic_changes"] = {
+                                "created": created[:5],
+                                "updated": updated[:5]
+                            }
+                    except Exception:
+                        pass
+
                     _superset_changed.set()
                 mtime = new_mtime
         except OSError:
@@ -544,6 +421,13 @@ def _run_process_flags() -> None:
 
 if _superset_changed.is_set():
     _superset_changed.clear()
+    # Show notifications for topic changes
+    if "topic_changes" in st.session_state:
+        changes = st.session_state.pop("topic_changes")
+        for topic in changes.get("created", []):
+            st.toast(f"✨ Created: {topic}", icon="✨")
+        for topic in changes.get("updated", []):
+            st.toast(f"🔄 Updated: {topic}", icon="🔄")
     st.rerun()
 
 # ============================================================================
@@ -553,17 +437,9 @@ if _superset_changed.is_set():
 
 # Load knowledge bases
 superset_path = os.path.join(PROJECT_ROOT, "prep", "superset.k.json")
-index_path = os.path.join(PROJECT_ROOT, "Interview-Prep-INDEX.k.json")
 
 # Get sidebar title from index file if it exists
 sidebar_title = APP_TITLE
-if os.path.exists(index_path):
-    try:
-        with open(index_path, 'r') as f:
-            index_data = json.load(f)
-            sidebar_title = index_data.get('label', sidebar_title)
-    except Exception:
-        pass
 
 st.sidebar.title(sidebar_title)
 st.sidebar.markdown("---")
@@ -644,6 +520,7 @@ if _tag_changed:
     st.session_state.pop("selected_topic", None)
     st.session_state.pop("selected_topic_tag", None)
     st.session_state.pop("selected_topic_idx", None)
+    st.session_state.pop("tag_search_raw", None)
 
 # Restore search term from URL on first load (before the widget is instantiated)
 if _qp_search and "tag_search_raw" not in st.session_state:
@@ -662,13 +539,24 @@ with st.sidebar.container(border=True):
 
     if _search and os.path.exists(superset_path):
         # Search mode: filter all topics by label or tags
-        _all_topics = get_topics(superset_path)
+        # CACHE FIX: Clear @st.cache_data before unfiltered search
+        # Issue: get_topics() has @st.cache_data decorator. When called with a tag parameter earlier
+        # (e.g., get_topics(path, "databases")), the cache stores 341 filtered results.
+        # Later, calling get_topics(path) with no tag should get all 349 topics, but Streamlit's
+        # cache doesn't properly distinguish between tag=None and tag="specific_tag", causing
+        # the filtered cache to be reused. Explicit clear() forces a fresh read from file.
+        get_topics.clear()
+        _all_topics = get_topics(superset_path, tag=None)
         _topics = [
             t for t in _all_topics
             if _search in t.get("label", "").lower()
             or _search in t.get("tags", "").lower()
         ]
+        # Debug: log search results
+        print(f"🔍 Search: '{_search}' | Total topics: {len(_all_topics)} | Matches: {len(_topics)}", file=sys.stderr)
         _header = f"**🔍** `{len(_topics)}` result(s)"
+        st.session_state["_search_mode"] = True
+        st.session_state["_search_topics"] = _topics
     else:
         # Normal mode: filter by active tag
         _topics = get_topics(superset_path, _active_tag)
@@ -676,6 +564,8 @@ with st.sidebar.container(border=True):
             _header = f"**📋 {_active_tag.replace('-', ' → ')}** `{len(_topics)}`"
         else:
             _header = f"**📋 All Topics** `{len(_topics)}`"
+        st.session_state["_search_mode"] = False
+        st.session_state.pop("_search_topics", None)
 
     st.markdown(_header)
 
@@ -798,7 +688,12 @@ if "selected_topic" in st.session_state:
     if "selected_topic_idx" not in st.session_state:
         st.session_state.selected_topic_idx = 0
 
-    topics = get_topics(superset_path, tag)
+    # Use search-filtered topics if in search mode, otherwise use tag-filtered topics
+    if st.session_state.get("_search_mode"):
+        topics = st.session_state.get("_search_topics", [])
+    else:
+        topics = get_topics(superset_path, tag)
+
     if len(topics) > 1:
         def _navigate(new_idx: int) -> None:
             new_topic = topics[new_idx]
@@ -859,14 +754,10 @@ if "selected_topic" in st.session_state:
                 _section_header("### 📝 Answer", "flag_answer", "answer")
                 st.markdown(metadata['answer'])
 
-            _SKIP_KEYS = {'answer', 'mermaid', 'tags'}
-            _LANG_MAP = {'js': 'javascript', 'cc': 'cpp', 'py': 'python'}
-            for _mk, _mv in metadata.items():
-                if _mk in _SKIP_KEYS or not _mv:
-                    continue
-                _lang = _LANG_MAP.get(_mk, _mk)
-                _section_header(f"### 💻 {_mk.upper()}", f"flag_{_mk}_{question_id}", _mk)
-                st.code(_mv, language=_lang)
+            # Only metadata.code is supported (see metadata.get(code) constraint)
+            if metadata.get('code'):
+                _section_header("### 💻 Code", "flag_code", "code")
+                st.code(metadata['code'], language='python')
 
     except Exception as e:
         st.error(f"Error loading question metadata: {e}")
@@ -936,11 +827,9 @@ if "selected_parent_tag" in st.session_state and "selected_child" in st.session_
                 except Exception:
                     st.code(metadata['mermaid'], language='mermaid')
 
-            for lang in ['python', 'javascript', 'rust', 'go', 'cpp', 'c']:
-                code_key = f'code_{lang}'
-                if metadata.get(code_key):
-                    st.markdown(f"### 💻 {lang.upper()} Code")
-                    st.code(metadata[code_key], language=lang)
+            if metadata.get('code'):
+                st.markdown("### 💻 Code")
+                st.code(metadata['code'], language='python')
 
             if metadata.get('tags'):
                 st.markdown("---")
