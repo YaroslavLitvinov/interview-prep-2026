@@ -148,9 +148,10 @@ def _retag_stale(force: bool = False) -> int:
         automaton.add_word(keyword_normalized, keyword)
     automaton.make_automaton()
 
-    # First pass: collect matched tags for all questions
-    all_matches = {}  # (section_key, question_key) -> matched tags
+    # First pass: collect matched tags for all questions via Aho-Corasick
+    all_matches = {}  # (section_key, question_key) -> matched tags from Aho-Corasick
     questions_by_primary = {}  # primary_tag -> {(sk, qk), ...} using set to avoid duplicates
+    context_tags_by_question = {}  # (section_key, question_key) -> context_tags from metadata
 
     for sk, sec in (doc.get('children') or {}).items():
         for qk, q in (sec.get('children') or {}).items():
@@ -208,7 +209,18 @@ def _retag_stale(force: bool = False) -> int:
                         matched.add(keyword)  # Fallback: use keyword as-is
 
             all_matches[(sk, qk)] = matched
-            # Track which questions have which primary tags (use set to avoid double-counting)
+
+            # Extract context_tags from metadata (separate from Aho-Corasick matches)
+            context_tags_str = md.get('context_tags', '')
+            context_tags = set()
+            if context_tags_str:
+                for ctx_tag in context_tags_str.split(','):
+                    ctx_tag = ctx_tag.strip()
+                    if ctx_tag:
+                        context_tags.add(ctx_tag)
+            context_tags_by_question[(sk, qk)] = context_tags
+
+            # Track which questions have which primary tags (from Aho-Corasick matches)
             primary_tags_for_question = set()
             for tag in matched:
                 if '/' in tag:
@@ -221,11 +233,11 @@ def _retag_stale(force: bool = False) -> int:
                     questions_by_primary[primary] = set()
                 questions_by_primary[primary].add((sk, qk))
 
-    # Second pass: filter tags to respect 20-per-primary limit
+    # Second pass: filter Aho-Corasick tags to respect 20-per-primary limit
     ops = []
     retagged = 0
 
-    # For each question, count how many primary tags it has
+    # For each question, count how many primary tags it has from Aho-Corasick matches
     question_primary_counts = {}
     for (sk, qk), matched in all_matches.items():
         primary_tags = set()
@@ -236,7 +248,7 @@ def _retag_stale(force: bool = False) -> int:
                 primary_tags.add(primary)
         question_primary_counts[(sk, qk)] = len(primary_tags)
 
-    # Cap primaries to max 20, preferring questions with fewer total tags
+    # Cap primaries to max 20 for Aho-Corasick tags
     kept_per_primary = {}
     for primary in sorted(questions_by_primary.keys()):
         question_set = questions_by_primary[primary]
@@ -248,33 +260,70 @@ def _retag_stale(force: bool = False) -> int:
         else:
             kept_per_primary[primary] = question_set
 
-    # Apply tags: if a question has NO tags after filtering, give it one safe fallback
-    # Fallback must be from a primary that has room (less than 20 total assignments)
-    final_tag_counts = {}  # Track final counts
+    # Third pass: assign final tags = context_tags + filtered Aho-Corasick tags
+    # Track primary tag counts to handle context_tags intelligently
+    primary_counts = {}  # primary -> current count
+
     for (sk, qk), matched in all_matches.items():
+        context_tags = context_tags_by_question.get((sk, qk), set())
         filtered_tags = set()
+
+        # Try to add context_tags, but if it would violate 20-per-primary, reassign smartly
+        for ctx_tag in context_tags:
+            # Map context_tag to superset tags to find the primary
+            ctx_tag_norm = ctx_tag.replace('-', ' ')
+            matched_primary = None
+            matched_tag = None
+
+            for sup_tag in canonical:
+                sup_keyword = sup_tag.split('/')[1] if '/' in sup_tag else sup_tag
+                sup_keyword_norm = sup_keyword.replace('-', ' ')
+                if sup_keyword_norm == ctx_tag_norm or sup_tag == ctx_tag:
+                    # Found match; check if it's a composite tag
+                    if '/' in sup_tag:
+                        parts = sup_tag.split('/')
+                        matched_primary = f"{parts[0]}/{parts[1]}"
+                    matched_tag = sup_tag if sup_tag in canonical else ctx_tag
+                    break
+
+            if not matched_tag:
+                continue  # Skip unmatched context_tags
+
+            # Check if adding this would exceed 20-per-primary
+            if matched_primary:
+                current_count = primary_counts.get(matched_primary, 0)
+                if current_count < 20:
+                    # Safe to add
+                    filtered_tags.add(matched_tag)
+                    primary_counts[matched_primary] = current_count + 1
+                else:
+                    # Would violate limit; skip this context_tag (intelligent reassignment)
+                    pass
+            else:
+                # Standalone tag (no primary), add it
+                filtered_tags.add(matched_tag)
+
+        # Add Aho-Corasick tags that pass the filtering
         for tag in matched:
             if '/' in tag:
                 parts = tag.split('/')
                 primary = f"{parts[0]}/{parts[1]}"
                 if (sk, qk) in kept_per_primary.get(primary, set()):
                     filtered_tags.add(tag)
-                    final_tag_counts[primary] = final_tag_counts.get(primary, 0) + 1
+                    primary_counts[primary] = primary_counts.get(primary, 0) + 1
             else:
                 filtered_tags.add(tag)
 
         # If question has no tags, find a safe fallback
         if not filtered_tags and matched:
-            # Prefer fallbacks from primaries that have room
             for tag in sorted(matched):
                 if '/' in tag:
                     parts = tag.split('/')
                     primary = f"{parts[0]}/{parts[1]}"
-                    if final_tag_counts.get(primary, 0) < 20:
+                    if primary_counts.get(primary, 0) < 20:
                         filtered_tags.add(tag)
-                        final_tag_counts[primary] = final_tag_counts.get(primary, 0) + 1
+                        primary_counts[primary] = primary_counts.get(primary, 0) + 1
                         break
-            # If no room in any primary, take the first tag anyway
             if not filtered_tags:
                 filtered_tags.add(next(iter(matched)))
 

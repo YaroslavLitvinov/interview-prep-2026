@@ -245,24 +245,21 @@ get_topics.clear = get_topics.cache_clear
 
 def filter_by_tag(topics: list[BasicTopic], tag: Optional[str]) -> list[BasicTopic]:
     """Filter topics by tag. None/empty → all topics.
-    A parent tag (e.g. 'language') matches any 'language/*'.
-    A full tag (e.g. 'language/python') matches that exact tag string.
+    - Exact match: system-design matches questions tagged 'system-design'
+    - Parent match: system matches questions tagged 'system/...'
     """
     if not tag:
         return topics
-    is_full = '/' in tag
-    prefix = tag + '/'
     out: list[BasicTopic] = []
     for t in topics:
         if not t.tags:
             continue
         tag_list = [s.strip() for s in t.tags.split(',')]
-        if is_full:
-            if tag in tag_list:
+        # Check for exact match OR parent prefix match
+        for q_tag in tag_list:
+            if q_tag == tag or q_tag.startswith(tag + '/'):
                 out.append(t)
-        else:
-            if any(s.startswith(prefix) for s in tag_list):
-                out.append(t)
+                break
     return out
 
 
@@ -304,24 +301,15 @@ def get_tags(json_file_path, tag=None):
                     tags = [t.strip() for t in tags_str.split(',')]
                     all_tags.extend(tags)
 
-        if tag is None:
-            # Return unique parent tags (part before '/')
-            parent_tags = set()
-            for full_tag in all_tags:
-                if '/' in full_tag:
-                    parent = full_tag.split('/')[0]
-                    parent_tags.add(parent)
-            return sorted(list(parent_tags))
-        else:
-            # Return nested tags for specified parent (part after '/')
-            nested_tags = set()
-            prefix = tag + '/'
-            for full_tag in all_tags:
-                if full_tag.startswith(prefix):
-                    nested = full_tag[len(prefix):]
-                    if nested:
-                        nested_tags.add(nested)
-            return sorted(list(nested_tags))
+        # Return all root-level tags (standalone + parent from composites), sorted lexicographically
+        root_tags = set()
+        for full_tag in all_tags:
+            if '/' in full_tag:
+                parent = full_tag.split('/')[0]
+                root_tags.add(parent)
+            else:
+                root_tags.add(full_tag)
+        return sorted(list(root_tags), key=str.lower)
 
     except FileNotFoundError:
         return []
@@ -524,8 +512,7 @@ def _ids_from_search(q: str) -> list[str]:
     ]
 
 
-def _ids_from_tag(parent: Optional[str], child: Optional[str]) -> list[str]:
-    tag = f"{parent}/{child}" if parent and child else parent
+def _ids_from_tag(tag: Optional[str]) -> list[str]:
     return [t.topic_id for t in filter_by_tag(get_topics(superset_path), tag)]
 
 
@@ -535,12 +522,8 @@ def _ensure_selection_valid() -> None:
         st.session_state["selected-topic-id"] = filtered[0] if filtered else None
 
 
-def _filter_label_for_tag(parent: Optional[str], child: Optional[str]) -> str:
-    if parent and child:
-        return f"{parent} → {child}"
-    if parent:
-        return parent
-    return "All Topics"
+def _filter_label_for_tag(tag: Optional[str]) -> str:
+    return tag if tag else "All Topics"
 
 
 def _on_search_change():
@@ -550,28 +533,12 @@ def _on_search_change():
     _ensure_selection_valid()
 
 
-def _on_parent_change():
-    # Child options depend on parent — explicitly clear the child selection.
-    parent = st.session_state.get("sel_parent_pills")
-    if parent:
-        # Clear child tag selection when parent changes
-        st.session_state["sel_child_pills"] = None
-    else:
-        st.session_state.pop("sel_child_pills", None)
+def _on_tag_change():
     # Tag click clears the search box (last filter wins).
     st.session_state["tag_search_raw"] = ""
-    st.session_state["filtered-topics"] = _ids_from_tag(parent, None)
-    st.session_state["current_filter"] = _filter_label_for_tag(parent, None)
-    _ensure_selection_valid()
-
-
-def _on_child_change():
-    # Tag click clears the search box (last filter wins).
-    st.session_state["tag_search_raw"] = ""
-    parent = st.session_state.get("sel_parent_pills")
-    child = st.session_state.get("sel_child_pills")
-    st.session_state["filtered-topics"] = _ids_from_tag(parent, child)
-    st.session_state["current_filter"] = _filter_label_for_tag(parent, child)
+    tag = st.session_state.get("sel_tag_pills")
+    st.session_state["filtered-topics"] = _ids_from_tag(tag)
+    st.session_state["current_filter"] = _filter_label_for_tag(tag)
     _ensure_selection_valid()
 
 
@@ -585,36 +552,28 @@ def _init_from_url():
 
     qp_search = st.query_params.get("s") or ""
     qp_q = st.query_params.get("q") or ""
-    qp_parent = qp_child = None
+    qp_tag = None
     qp_topic_idx = 0
 
     if qp_q.lstrip("-").isdigit():
         qp_topic_idx = max(0, int(qp_q) - 1)
     elif qp_q:
-        parts = qp_q.split(".")
-        qp_parent = parts[0] if parts else None
+        parts = qp_q.split(".", 1)
+        qp_tag = parts[0] if parts[0] else None
         if len(parts) >= 2 and parts[1].lstrip("-").isdigit():
             qp_topic_idx = max(0, int(parts[1]) - 1)
-        else:
-            qp_child = parts[1] if len(parts) >= 2 else None
-            try:
-                qp_topic_idx = max(0, int(parts[2]) - 1) if len(parts) >= 3 else 0
-            except (ValueError, TypeError):
-                qp_topic_idx = 0
 
     if qp_search:
         st.session_state["tag_search_raw"] = qp_search
-    if qp_parent:
-        st.session_state["sel_parent_pills"] = qp_parent
-    if qp_child:
-        st.session_state["sel_child_pills"] = qp_child
+    if qp_tag:
+        st.session_state["sel_tag_pills"] = qp_tag
 
     if qp_search:
         filtered = _ids_from_search(qp_search)
         st.session_state["current_filter"] = f"🔍 {qp_search}"
-    elif qp_parent:
-        filtered = _ids_from_tag(qp_parent, qp_child)
-        st.session_state["current_filter"] = _filter_label_for_tag(qp_parent, qp_child)
+    elif qp_tag:
+        filtered = _ids_from_tag(qp_tag)
+        st.session_state["current_filter"] = _filter_label_for_tag(qp_tag)
     else:
         filtered = [t.topic_id for t in get_topics(superset_path)]
         st.session_state["current_filter"] = "All Topics"
@@ -633,32 +592,16 @@ with st.sidebar.container(border=True):
     st.markdown("**🏷️ Tags**")
 
     if os.path.exists(superset_path):
-        root_tags = get_tags(superset_path)
-        if root_tags:
+        tags = get_tags(superset_path)
+        if tags:
             st.pills(
-                "Category",
-                options=root_tags,
+                "Tags",
+                options=tags,
                 selection_mode="single",
-                key="sel_parent_pills",
+                key="sel_tag_pills",
                 label_visibility="collapsed",
-                on_change=_on_parent_change,
+                on_change=_on_tag_change,
             )
-            _parent = st.session_state.get("sel_parent_pills")
-            if _parent:
-                child_tags = get_tags(superset_path, _parent)
-                if child_tags:
-                    st.markdown(
-                        f"<div style='font-size:11px;color:#888;margin:4px 0 2px'>↳ {_parent}</div>",
-                        unsafe_allow_html=True,
-                    )
-                    st.pills(
-                        "Subcategory",
-                        options=child_tags,
-                        selection_mode="single",
-                        key="sel_child_pills",
-                        label_visibility="collapsed",
-                        on_change=_on_child_change,
-                    )
     else:
         st.error(f"❌ Superset file not found: {superset_path}")
 
@@ -695,22 +638,18 @@ with st.sidebar.container(border=True):
 
 
 # Sync full navigation state to URL.
-# ?s=term when search active; ?q=parent.child.N / ?q=parent.N / ?q=N otherwise.
+# ?s=term when search active; ?q=tag.N / ?q=N otherwise.
 def _build_nav_q() -> Optional[str]:
-    parent = st.session_state.get("sel_parent_pills")
-    child = st.session_state.get("sel_child_pills") if parent else None
+    tag = st.session_state.get("sel_tag_pills")
     selected = st.session_state.get("selected-topic-id")
     filtered: list[str] = st.session_state.get("filtered-topics", [])
     idx = filtered.index(selected) if selected in filtered else 0
 
-    if not parent:
+    if not tag:
         return str(idx + 1) if idx else None
-    parts = [parent]
-    if child:
-        parts.append(child)
     if idx:
-        parts.append(str(idx + 1))
-    return ".".join(parts)
+        return f"{tag}.{idx + 1}"
+    return tag
 
 
 _nav_q = _build_nav_q()

@@ -166,56 +166,43 @@ class TestTagsRendering:
         )
 
     def test_tags_container_styling(self, app):
-        """Selecting a parent tag reveals child-tag pills (hierarchical expansion)."""
+        """Tags can be selected from the generic tag pills."""
         app.run()
 
         sidebar_pills = app.sidebar.pills
         assert len(sidebar_pills) > 0, "Sidebar should contain a pills widget"
 
-        parent_pills = sidebar_pills[0]
-        first_tag = parent_pills.options[0]
+        tag_pills = sidebar_pills[0]
+        assert len(tag_pills.options) > 0, "Tag pills should have options"
 
-        # Select the first parent tag and rerun
-        parent_pills.set_value(first_tag).run()
+        # Select a tag and verify the app can handle it
+        first_tag = tag_pills.options[0]
+        tag_pills.set_value(first_tag).run()
 
-        # Child pills should now appear (a second pills widget)
+        # Verify selection was applied (app should still be functional)
         updated_pills = app.sidebar.pills
-        assert len(updated_pills) > 1, (
-            f"After selecting parent tag '{first_tag}', child-tag pills should appear. "
-            f"Found {len(updated_pills)} pills widget(s)."
-        )
+        assert len(updated_pills) > 0, "Pills widget should still exist after tag selection"
 
     def test_child_tag_reset_on_parent_change(self, app):
-        """Selecting a different parent tag resets any selected child tag."""
+        """Selecting different tags maintains session state correctly."""
         app.run()
 
         sidebar_pills = app.sidebar.pills
-        parent_pills = sidebar_pills[0]
-        first_tag = parent_pills.options[0]
-        second_tag = parent_pills.options[1] if len(parent_pills.options) > 1 else first_tag
+        tag_pills = sidebar_pills[0]
 
-        # Select first parent and a child
-        parent_pills.set_value(first_tag).run()
-        updated_pills = app.sidebar.pills
-        child_was_set = False
-        if len(updated_pills) > 1:
-            child_pills = updated_pills[1]
-            if len(child_pills.options) > 0:
-                child_pills.set_value(child_pills.options[0]).run()
-                child_was_set = True
+        if len(tag_pills.options) < 2:
+            return  # Skip if not enough tags to test
 
-        if not child_was_set:
-            # If we couldn't set a child in this test, skip the reset verification
-            return
+        first_tag = tag_pills.options[0]
+        second_tag = tag_pills.options[1]
 
-        # Select a different parent tag
-        parent_pills.set_value(second_tag).run()
+        # Select first tag
+        tag_pills.set_value(first_tag).run()
+        assert app.session_state["sel_tag_pills"] == first_tag
 
-        # Child tag state should be cleared to None
-        assert app.session_state["sel_child_pills"] is None, (
-            f"Child tag selection should be reset when parent tag changes, "
-            f"but got: {app.session_state['sel_child_pills']}"
-        )
+        # Select a different tag
+        tag_pills.set_value(second_tag).run()
+        assert app.session_state["sel_tag_pills"] == second_tag
 
 
 class TestFlagItem:

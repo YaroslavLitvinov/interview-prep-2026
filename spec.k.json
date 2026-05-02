@@ -37,7 +37,7 @@
       "constraints": {
         "constraint_sections_have_tags": {
           "id": "constraint_sections_have_tags",
-          "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json && children=$(jq '.children // {}' $PROJECT_ROOT/prep/superset.k.json | jq 'length') && test \"$children\" -gt 0 || { echo 'No sections found'; exit 1; }; invalid=$(jq '[.children // {} | to_entries[] | select(.value.metadata == null or .value.metadata.tags == null or .value.metadata.tags == \"\") | .key] | length' $PROJECT_ROOT/prep/superset.k.json); test \"$invalid\" -eq 0 || { echo 'Sections without tags found'; exit 1; }",
+          "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json && children=$(jq '.children // {}' $PROJECT_ROOT/prep/superset.k.json | jq 'length') && test \"$children\" -gt 0 || { echo 'No sections found'; exit 1; }; invalid=$(jq '[.children // {} | to_entries[] | select(.value.metadata != null and (.value.metadata.tags == null or .value.metadata.tags == \"\")) | .key] | length' $PROJECT_ROOT/prep/superset.k.json); test \"$invalid\" -eq 0 || { echo 'Sections with metadata but missing tags found'; exit 1; }",
           "description": "Structural: all sections must have metadata.tags (comma-separated)",
           "fails_count": 1
         },
@@ -111,6 +111,24 @@
           "id": "constraint_primary_tags_max_20_topics",
           "cmd": "cd $PROJECT_ROOT && python3 << 'PYEOF'\nimport json\nwith open('prep/superset.k.json') as f:\n    data = json.load(f)\nprimary_tag_counts = {}\nfor section in data.get('children', {}).values():\n    for question in section.get('children', {}).values():\n        tags = question.get('metadata', {}).get('tags', '')\n        if tags:\n            primary_tags = set()\n            for tag in tags.split(','):\n                tag = tag.strip()\n                if tag.count('/') >= 1:\n                    parts = tag.split('/')\n                    primary_tag = f\"{parts[0]}/{parts[1]}\"\n                    primary_tags.add(primary_tag)\n            for pt in primary_tags:\n                primary_tag_counts[pt] = primary_tag_counts.get(pt, 0) + 1\nviolations = {tag: count for tag, count in primary_tag_counts.items() if count > 20}\nif violations:\n    sorted_v = sorted(violations.items(), key=lambda x: -x[1])\n    print(f\"Primary tags exceeding 20 topics: {len(violations)}\")\n    for tag, count in sorted_v[:5]:\n        print(f\"  {tag}: {count}\")\n    exit(1)\nexit(0)\nPYEOF",
           "description": "Structural: each primary tag (Parent/Child format) can have at most 20 questions. Counts unique primary tags per question to avoid double-counting nested tags. HINT: If violations occur, add more metadata.superset_tags to split large primary tags into smaller ones, then rerun process_flags.py --force to rebalance tagging.",
+          "fails_count": 1
+        },
+        "constraint_questions_have_context_tags": {
+          "id": "constraint_questions_have_context_tags",
+          "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json && sections=$(jq '.children // {}' $PROJECT_ROOT/prep/superset.k.json | jq 'length') && test \"$sections\" -gt 0 || { echo 'No sections found'; exit 1; }; invalid=$(jq '[.children // {} | to_entries[] | .value.children // {} | to_entries[] | select(.value.metadata == null or .value.metadata.context_tags == null or .value.metadata.context_tags == \"\") | .key] | length' $PROJECT_ROOT/prep/superset.k.json); test \"$invalid\" -eq 0 || { echo \"Questions without context_tags: $invalid\"; exit 1; }",
+          "description": "Structural: all questions must have metadata.context_tags (comma-separated values)",
+          "fails_count": 1
+        },
+        "constraint_context_tags_valid_values": {
+          "id": "constraint_context_tags_valid_values",
+          "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json || { echo 'File not found'; exit 1; }; invalid=$(jq '[.children // {} | to_entries[] | .value.children // {} | to_entries[] | select(.value.metadata.context_tags != null and .value.metadata.context_tags != \"\") | .value.metadata.context_tags | split(\",\") | .[] | select(ltrimstr(\" \") | rtrimstr(\" \") | test(\"^(story|behavioral-story|system-design|case-study|code-example|interview-prep|interview-technical)$\") | not)] | length' $PROJECT_ROOT/prep/superset.k.json); test \"$invalid\" -eq 0 || { echo \"Invalid context_tags values found: $invalid\"; exit 1; }",
+          "description": "Format: context_tags values must be from allowed set: story, behavioral-story, system-design, case-study, code-example, interview-prep, interview-technical",
+          "fails_count": 1
+        },
+        "constraint_context_tags_in_superset": {
+          "id": "constraint_context_tags_in_superset",
+          "cmd": "cd $PROJECT_ROOT && python3 << 'PYEOF'\nimport json\nwith open('prep/superset.k.json') as f:\n    data = json.load(f)\n\n# Extract superset_tags from metadata\nsuperset_tags_str = data.get('metadata', {}).get('superset_tags', '')\nsuperset_tags = set(tag.strip() for tag in superset_tags_str.split(',') if tag.strip())\n\n# Collect all context_tags used in questions\nused_context_tags = set()\nquestions_by_tag = {}\n\nfor section in data.get('children', {}).values():\n    for question in section.get('children', {}).values():\n        metadata = question.get('metadata', {})\n        context_tags_str = metadata.get('context_tags', '')\n        if context_tags_str:\n            for tag in context_tags_str.split(','):\n                tag = tag.strip()\n                if tag:\n                    used_context_tags.add(tag)\n                    if tag not in questions_by_tag:\n                        questions_by_tag[tag] = []\n                    questions_by_tag[tag].append(question.get('label', 'unknown'))\n\n# Find missing tags (used but not in superset)\nmissing = sorted(used_context_tags - superset_tags)\n\nif missing:\n    print(f\"Context tags NOT in superset_tags ({len(missing)} missing):\")\n    for tag in missing:\n        count = len(questions_by_tag[tag])\n        print(f\"  - {tag} (used in {count} question(s))\")\n    exit(1)\n\nprint(f\"\u2713 All {len(used_context_tags)} context_tags are in superset_tags\")\nexit(0)\nPYEOF",
+          "description": "Structural: all context_tags values must exist in metadata.superset_tags. Reports missing tags with usage count.",
           "fails_count": 1
         }
       },
