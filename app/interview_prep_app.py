@@ -506,10 +506,35 @@ def _ids_from_search(q: str) -> list[str]:
     q = q.strip().lower()
     if not q:
         return [t.topic_id for t in get_topics(superset_path)]
-    return [
-        t.topic_id for t in get_topics(superset_path)
-        if q in t.label.lower() or q in t.tags.lower()
-    ]
+
+    def to_searchable(value) -> str:
+        if isinstance(value, str):
+            return value.lower()
+        elif isinstance(value, dict):
+            return json.dumps(value).lower()
+        elif value is None:
+            return ''
+        else:
+            return str(value).lower()
+
+    results = []
+    try:
+        with open(superset_path, 'r') as f:
+            doc = json.load(f)
+        for section_key, section in doc.get('children', {}).items():
+            for q_key, question in section.get('children', {}).items():
+                topic_id = f"{section_key}.{question.get('id', q_key)}"
+                label = to_searchable(question.get('label', q_key))
+                tags = to_searchable(question.get('metadata', {}).get('tags', ''))
+                desc = to_searchable(question.get('description', ''))
+                answer = to_searchable(question.get('metadata', {}).get('answer', ''))
+                code = to_searchable(question.get('metadata', {}).get('code', ''))
+
+                if q in label or q in tags or q in desc or q in answer or q in code:
+                    results.append(topic_id)
+        return results
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
 
 
 def _ids_from_tag(tag: Optional[str]) -> list[str]:
