@@ -75,70 +75,64 @@ class TestElementIdentifiers:
 
 
 class TestMermaidControls:
-    """Mermaid controls render as two separate widgets with stable test IDs
-    inside a container keyed 'mermaid-controls'."""
+    """Mermaid controls render as two separate widgets with stable static
+    keys ('mermaid-lock', 'mermaid-dir') inside a container keyed
+    'mermaid-controls'. Only one mermaid renders per page, so there's no
+    need to disambiguate by topic."""
 
-    # All test IDs that must be present when a mermaid topic is displayed
-    EXPECTED_TEST_IDS = [
-        "mermaid-lock-control",
-        "mermaid-dir-controls",
-    ]
+    LOCK_KEY = "mermaid-lock"
+    DIR_KEY = "mermaid-dir"
 
-    MERMAID_TOPIC = {
-        "label": "Capacity Estimation",
-        "description": "How do you estimate capacity requirements for a service?",
-        "section": "System Design - Large-Scale Services",
-        "tags": "system-concept",
-    }
+    SELECTED_ID = "system_design.q1"  # Capacity Estimation
 
     def _app_with_topic(self, app):
-        app.session_state["selected_topic"] = self.MERMAID_TOPIC
-        app.session_state["selected_topic_idx"] = 0
-        app.session_state["selected_topic_tag"] = "system-concept"
+        app.session_state["selected-topic-id"] = self.SELECTED_ID
+        app.session_state["filtered-topics"] = [self.SELECTED_ID]
+        app.session_state["_url_restored"] = True  # skip URL restore overwrite
         app.run()
         return app
 
     def test_direction_pills_has_stable_test_id(self, app):
-        """Direction pills has fixed key 'mermaid-dir-controls'."""
+        """Direction pills uses the stable 'mermaid-dir' key."""
         self._app_with_topic(app)
         keys = [p.key for p in app.pills]
-        assert "mermaid-dir-controls" in keys, f"Expected 'mermaid-dir-controls', got: {keys}"
+        assert self.DIR_KEY in keys, f"Expected {self.DIR_KEY!r}, got: {keys}"
 
     def test_lock_pills_has_stable_test_id(self, app):
-        """Lock pills has fixed key 'mermaid-lock-control'."""
+        """Lock pills uses the stable 'mermaid-lock' key."""
         self._app_with_topic(app)
         keys = [p.key for p in app.pills]
-        assert "mermaid-lock-control" in keys, f"Expected 'mermaid-lock-control', got: {keys}"
+        assert self.LOCK_KEY in keys, f"Expected {self.LOCK_KEY!r}, got: {keys}"
 
     def test_direction_pills_options(self, app):
         """Direction pills exposes exactly TD, LR, BT, RL."""
         self._app_with_topic(app)
-        dir_pills = next(p for p in app.pills if p.key == "mermaid-dir-controls")
+        dir_pills = next(p for p in app.pills if p.key == self.DIR_KEY)
         assert list(dir_pills.options) == ["TD", "LR", "BT", "RL"]
 
     def test_lock_pills_options(self, app):
         """Lock pills exposes exactly one option."""
         self._app_with_topic(app)
-        lock_pills = next(p for p in app.pills if p.key == "mermaid-lock-control")
+        lock_pills = next(p for p in app.pills if p.key == self.LOCK_KEY)
         assert len(lock_pills.options) == 1
 
     def test_controls_are_separate_widgets(self, app):
         """Lock and direction are two distinct pills widgets inside mermaid-controls."""
         self._app_with_topic(app)
         mermaid_pills = [
-            p for p in app.pills
-            if p.key in ("mermaid-dir-controls", "mermaid-lock-control")
+            p for p in app.pills if p.key in (self.LOCK_KEY, self.DIR_KEY)
         ]
         assert len(mermaid_pills) == 2, (
             f"Expected 2 separate mermaid control widgets, found {len(mermaid_pills)}"
         )
 
     def test_all_control_test_ids_present(self, app):
-        """All entries in EXPECTED_TEST_IDS are available as widget keys when
-        a topic with mermaid controls is displayed."""
+        """Both expected mermaid control widget keys are present when a topic
+        with mermaid controls is displayed."""
         self._app_with_topic(app)
+        expected = [self.LOCK_KEY, self.DIR_KEY]
         pill_keys = {p.key for p in app.pills}
-        missing = [tid for tid in self.EXPECTED_TEST_IDS if tid not in pill_keys]
+        missing = [tid for tid in expected if tid not in pill_keys]
         assert not missing, (
             f"Missing mermaid control test IDs: {missing}\n"
             f"Available pill keys: {sorted(pill_keys)}"

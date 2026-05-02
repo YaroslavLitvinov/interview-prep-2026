@@ -1,4 +1,5 @@
 import streamlit as st
+import functools
 import os
 import subprocess
 import sys
@@ -6,6 +7,31 @@ import json
 import re
 import threading
 import time
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
+
+class BasicTopic(BaseModel):
+    """A topic as returned by get_topics — only the fields the sidebar needs
+    (radio list, search filter, tag derivation). The composite `topic_id`
+    is suitable as a stable widget key."""
+    topic_id: str
+    label: str
+    tags: str = ""
+
+
+class CompleteTopic(BasicTopic):
+    """A BasicTopic enriched with the data render_topic needs to draw the
+    full content area: description, section label, metadata sections, and
+    the raw IDs flag_item requires. `error` is set if the underlying
+    superset JSON failed to load."""
+    description: str = ""
+    section: str = ""  # human-readable section label, for the 📂 caption
+    metadata: dict = Field(default_factory=dict)
+    section_id: Optional[str] = None
+    question_id: Optional[str] = None
+    error: Optional[str] = None
 
 # Make locally-installed deps importable (pip install --target=.deps)
 _DEPS = os.path.join(os.getenv("PROJECT_ROOT", os.getcwd()), ".deps")
@@ -35,8 +61,8 @@ st.markdown("""
     .st-key-mermaid-controls { flex-direction: row !important; align-items: center; gap: 0.5rem; }
     .st-key-section-header-mermaid, .st-key-section-header-answer, .st-key-section-header-code { flex-direction: row !important; align-items: center; }
     .st-key-section-header-mermaid > div:last-child, .st-key-section-header-answer > div:last-child, .st-key-section-header-code > div:last-child { margin-left: auto; }
-    .st-key-nav-controls, .st-key-nav-controls-search { flex-direction: row !important; align-items: center; }
-    .st-key-nav-controls > div:nth-child(2), .st-key-nav-controls-search > div:nth-child(2) { margin: 0 auto; white-space: nowrap; }
+    .st-key-nav-controls { flex-direction: row !important; align-items: center; }
+    .st-key-nav-controls > div:nth-child(2) { margin: 0 auto; white-space: nowrap; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -54,55 +80,33 @@ if "selected_subtopic" not in st.session_state:
 if "selected_item" not in st.session_state:
     st.session_state.selected_item = None
 
-if "_active_tag" not in st.session_state:
-    st.session_state["_active_tag"] = None
-
 _MERMAID_DIRECTIONS = ["TD", "LR", "BT", "RL"]
 
 
-def render_mermaid(code: str, key: str = "mermaid") -> None:
+def render_mermaid(code: str, topic_id: str) -> None:
     from streamlit_mermaid import st_mermaid
 
-    # Detect direction declared in the code; fall back to TD
-    _m = re.match(r'^(?:graph|flowchart)\s+(\w+)', code.strip(), re.IGNORECASE)
-    _code_dir = (_m.group(1).upper() if _m else "TD")
-    if _code_dir not in _MERMAID_DIRECTIONS:
-        _code_dir = "TD"
-
-    _orient_key = f"_mermaid_dir_{key}"
-    _lock_key = f"_mermaid_lock_{key}"
-    if _orient_key not in st.session_state:
-        st.session_state[_orient_key] = _code_dir
-    if _lock_key not in st.session_state:
-        st.session_state[_lock_key] = True  # locked by default
-
-    # Reset fixed widget keys when diagram key changes (topic navigation)
-    if st.session_state.get("_mermaid_widget_key") != key:
-        st.session_state.pop("mermaid-lock-control", None)
-        st.session_state.pop("mermaid-dir-controls", None)
-        st.session_state["_mermaid_widget_key"] = key
-
-    with st.container(key="mermaid-controls"):
-        _locked_sel = st.pills(
+    with st.container(key="mermaid-controls", width="stretch"):
+        st.pills(
             "Lock", ["🔒"],
-            default="🔒" if st.session_state[_lock_key] else None,
+            default="🔒",
             selection_mode="single",
-            key="mermaid-lock-control",
+            key="mermaid-lock",
             label_visibility="collapsed",
         )
-        _dir_sel = st.pills(
+        st.pills(
             "Direction", _MERMAID_DIRECTIONS,
-            default=st.session_state[_orient_key],
+            default=_MERMAID_DIRECTIONS[0],
             selection_mode="single",
-            key="mermaid-dir-controls",
+            key="mermaid-dir",
             label_visibility="collapsed",
         )
-    _locked = _locked_sel == "🔒"
-    _dir = _dir_sel or st.session_state[_orient_key]
-    st.session_state[_orient_key] = _dir
-    st.session_state[_lock_key] = _locked
 
-    # Rewrite the direction token in the first graph/flowchart line
+    _locked = st.session_state["mermaid-lock"] is not None
+    _dir = st.session_state["mermaid-dir"] or _MERMAID_DIRECTIONS[0]
+
+    # Pill is the sole source of direction — overwrite whatever the
+    # source declares (graph X / flowchart X) with the pill's value.
     _modified = re.sub(
         r'^((?:graph|flowchart)\s+)\w+',
         lambda m: m.group(1) + _dir,
@@ -110,76 +114,156 @@ def render_mermaid(code: str, key: str = "mermaid") -> None:
         count=1,
         flags=re.MULTILINE | re.IGNORECASE,
     )
-    st_mermaid(_modified, pan=not _locked, zoom=not _locked, show_controls=False, key=key)
+    st_mermaid(_modified, pan=not _locked, zoom=not _locked, show_controls=False, key=f"mermaid-{topic_id}")
+
+
+def prepare_topic_data(topic: BasicTopic) -> CompleteTopic:
+    """Augment a BasicTopic with description, section label, metadata, and IDs.
+    Returns a CompleteTopic; on JSON load failure `error` is populated and
+    the render fields are left empty.
+    """
+    try:
+        with open(superset_path, 'r') as f:
+            doc = json.load(f)
+        for section_key, section in doc.get('children', {}).items():
+            section_label = section.get('label', section_key)
+            for q_key, question in section.get('children', {}).items():
+                if question.get('label') == topic.label:
+                    return CompleteTopic(
+                        **topic.model_dump(),
+                        description=question.get('description', ''),
+                        section=section_label,
+                        metadata=question.get('metadata', {}),
+                        section_id=section_key,
+                        question_id=question.get('id', q_key),
+                    )
+    except Exception as e:
+        return CompleteTopic(**topic.model_dump(), error=str(e))
+    # Topic not found in document — return as-is with empty fields.
+    return CompleteTopic(**topic.model_dump())
+
+
+def render_topic(topic_id: str) -> None:
+    """Render a single topic by id. The topic is resolved from get_topics()
+    and the navigation siblings come from session_state['filtered-topics'],
+    which the sidebar's filter callbacks maintain.
+    """
+    topic_by_id = {t.topic_id: t for t in get_topics(superset_path)}
+    topic = topic_by_id.get(topic_id)
+    if topic is None:
+        st.error(f"Topic not found: {topic_id}")
+        return
+    complete = prepare_topic_data(topic)
+    filtered_ids: list[str] = st.session_state.get("filtered-topics", [])
+
+    st.header(f"📚 {st.session_state.get('current_filter', 'All Topics')}")
+
+    # Prev / Next driven by position inside filtered-topics.
+    if topic_id in filtered_ids and len(filtered_ids) > 1:
+        idx = filtered_ids.index(topic_id)
+
+        def _go_prev():
+            st.session_state["selected-topic-id"] = filtered_ids[idx - 1]
+
+        def _go_next():
+            st.session_state["selected-topic-id"] = filtered_ids[idx + 1]
+
+        with st.container(key="nav-controls"):
+            st.button("← Prev", key="btn-prev", on_click=_go_prev, disabled=(idx == 0))
+            st.text(f"Q {idx + 1}/{len(filtered_ids)}")
+            st.button("Next →", key="btn-next", on_click=_go_next, disabled=(idx == len(filtered_ids) - 1))
+
+    st.subheader(complete.label)
+    st.caption(f"📂 {complete.section}")
+    if complete.tags:
+        st.caption(f"🏷️ **Tags:** {complete.tags}")
+    st.markdown(f"{complete.description}")
+    st.markdown("---")
+
+    if complete.error:
+        st.error(f"Error loading question metadata: {complete.error}")
+        return
+
+    metadata = complete.metadata
+    if not metadata:
+        return
+
+    section_id = complete.section_id
+    question_id = complete.question_id
+
+    def _section_header(title: str, flag_key: str, meta_key: str):
+        with st.container(key=f"section-header-{meta_key}"):
+            st.markdown(title)
+            if st.button("🚩", key=flag_key, help=f"Flag {meta_key}"):
+                flag_item(section_id, question_id, meta_key)
+
+    if metadata.get('mermaid'):
+        st.markdown("### 📊 Diagram")
+        try:
+            render_mermaid(metadata['mermaid'], topic_id=complete.topic_id)
+        except Exception:
+            st.code(metadata['mermaid'], language='mermaid')
+
+    if metadata.get('answer'):
+        _section_header("### 📝 Answer", "flag_answer", "answer")
+        st.markdown(metadata['answer'])
+
+    # Only metadata.code is supported (see metadata.get(code) constraint)
+    if metadata.get('code'):
+        _section_header("### 💻 Code", "flag_code", "code")
+        st.code(metadata['code'], language='python')
 
 
 # Helper function to extract and organize tags from knowledge document
-@st.cache_data(show_spinner=False)
-def get_topics(json_file_path, tag=None):
-    """
-    Get topics (questions) from knowledge document filtered by tag.
-
-    Args:
-        json_file_path: Path to JSON knowledge file (e.g., superset.k.json)
-        tag: Optional tag to filter by. Can be:
-             - Parent tag (e.g., "language") - returns all topics with any language-* tag
-             - Full tag (e.g., "language-python") - returns topics with that exact tag
-             - None - returns all topics without filtering by tag
-
-    Returns:
-        List of topics (questions) as dicts with keys: label, description, section, tags.
+# Use functools.lru_cache (in-memory, no pickle) so Pydantic models defined
+# in __main__ work under AppTest. The watcher invalidates via .clear().
+@functools.lru_cache(maxsize=4)
+def get_topics(json_file_path) -> list[BasicTopic]:
+    """Load all topics (questions) from the knowledge document.
+    Tag-based filtering is the caller's job — see filter_by_tag().
     """
     try:
         with open(json_file_path, 'r') as f:
             data = json.load(f)
-
-        topics = []
-
-        # Iterate through all sections and questions
-        for section_key, section in data.get('children', {}).items():
-            section_label = section.get('label', section_key)
-            for q_key, question in section.get('children', {}).items():
-                tags_str = question.get('metadata', {}).get('tags', '')
-
-                if tag is None:
-                    # No filtering, include all topics
-                    topics.append({
-                        'label': question.get('label', q_key),
-                        'description': question.get('description', ''),
-                        'section': section_label,
-                        'tags': tags_str
-                    })
-                else:
-                    # Filter by tag
-                    if tags_str:
-                        tags_list = [t.strip() for t in tags_str.split(',')]
-
-                        # Check if tag matches
-                        if '-' in tag:
-                            # Full tag match (e.g., "language-python")
-                            if tag in tags_list:
-                                topics.append({
-                                    'label': question.get('label', q_key),
-                                    'description': question.get('description', ''),
-                                    'section': section_label,
-                                    'tags': tags_str
-                                })
-                        else:
-                            # Parent tag match (e.g., "language" matches "language-python", "language-go", etc.)
-                            for full_tag in tags_list:
-                                if full_tag.startswith(tag + '-'):
-                                    topics.append({
-                                        'label': question.get('label', q_key),
-                                        'description': question.get('description', ''),
-                                        'section': section_label,
-                                        'tags': tags_str
-                                    })
-                                    break
-
-        return topics
-
     except (FileNotFoundError, json.JSONDecodeError):
         return []
+
+    topics: list[BasicTopic] = []
+    for section_key, section in data.get('children', {}).items():
+        for q_key, question in section.get('children', {}).items():
+            topics.append(BasicTopic(
+                topic_id=f"{section_key}.{question.get('id', q_key)}",
+                label=question.get('label', q_key),
+                tags=question.get('metadata', {}).get('tags', ''),
+            ))
+    return topics
+
+
+# Watcher calls get_topics.clear(); alias to lru_cache's method.
+get_topics.clear = get_topics.cache_clear
+
+
+def filter_by_tag(topics: list[BasicTopic], tag: Optional[str]) -> list[BasicTopic]:
+    """Filter topics by tag. None/empty → all topics.
+    A parent tag (e.g. 'language') matches any 'language-*'.
+    A full tag (e.g. 'language-python') matches that exact tag string.
+    """
+    if not tag:
+        return topics
+    is_full = '-' in tag
+    prefix = tag + '-'
+    out: list[BasicTopic] = []
+    for t in topics:
+        if not t.tags:
+            continue
+        tag_list = [s.strip() for s in t.tags.split(',')]
+        if is_full:
+            if tag in tag_list:
+                out.append(t)
+        else:
+            if any(s.startswith(prefix) for s in tag_list):
+                out.append(t)
+    return out
 
 
 @st.cache_data(show_spinner=False)
@@ -243,28 +327,6 @@ def get_tags(json_file_path, tag=None):
         return []
     except json.JSONDecodeError:
         return []
-
-
-# Helper function to extract file path from markdown link
-def extract_file_path(description):
-    """Extract file path from markdown link [text](path) in description"""
-    match = re.search(r'\[.*?\]\((.*?)\)', description)
-    if match:
-        return match.group(1)
-    return None
-
-
-# Helper to flatten tree structure
-def flatten_tree(tree, items=None):
-    """Flatten tree structure to get all navigable items"""
-    if items is None:
-        items = {}
-    for label, node_data in tree.items():
-        if node_data.get("path"):
-            items[label] = node_data["path"]
-        if node_data.get("children"):
-            flatten_tree(node_data["children"], items)
-    return items
 
 
 # Helper function to flag a question metadata key
@@ -359,7 +421,7 @@ def _watch_superset(path: str, interval: float = 2.0) -> None:
                 if mtime != 0.0:
                     try:
                         # Get current topics before clearing cache
-                        prev_topics = {t['label']: hash(json.dumps(t, sort_keys=True))
+                        prev_topics = {t.label: hash(t.model_dump_json())
                                       for t in get_topics(path)}
                     except Exception:
                         prev_topics = {}
@@ -370,7 +432,7 @@ def _watch_superset(path: str, interval: float = 2.0) -> None:
 
                     try:
                         # Get new topics after clearing
-                        new_topics = {t['label']: hash(json.dumps(t, sort_keys=True))
+                        new_topics = {t.label: hash(t.model_dump_json())
                                      for t in get_topics(path)}
 
                         # Find created (new topics) and updated (same label, different content)
@@ -444,189 +506,209 @@ sidebar_title = APP_TITLE
 st.sidebar.title(sidebar_title)
 st.sidebar.markdown("---")
 
+# --- Filter helpers + on_change callbacks ---------------------------------
+# Single source of truth for the visible topic list lives in
+# st.session_state["filtered-topics"] as list[topic_id]. Each control
+# (search box, parent pill, child pill) recomputes it on change; last
+# control to fire wins (no intersection). selected-topic-id is kept inside
+# the filtered set by _ensure_selection_valid() so the radio always has a
+# valid option.
+
+def _ids_from_search(q: str) -> list[str]:
+    q = q.strip().lower()
+    if not q:
+        return [t.topic_id for t in get_topics(superset_path)]
+    return [
+        t.topic_id for t in get_topics(superset_path)
+        if q in t.label.lower() or q in t.tags.lower()
+    ]
+
+
+def _ids_from_tag(parent: Optional[str], child: Optional[str]) -> list[str]:
+    tag = f"{parent}-{child}" if parent and child else parent
+    return [t.topic_id for t in filter_by_tag(get_topics(superset_path), tag)]
+
+
+def _ensure_selection_valid() -> None:
+    filtered: list[str] = st.session_state.get("filtered-topics", [])
+    if st.session_state.get("selected-topic-id") not in filtered:
+        st.session_state["selected-topic-id"] = filtered[0] if filtered else None
+
+
+def _filter_label_for_tag(parent: Optional[str], child: Optional[str]) -> str:
+    if parent and child:
+        return f"{parent} → {child}"
+    if parent:
+        return parent
+    return "All Topics"
+
+
+def _on_search_change():
+    q = st.session_state.get("tag_search_raw", "").strip()
+    st.session_state["filtered-topics"] = _ids_from_search(q)
+    st.session_state["current_filter"] = f"🔍 {q}" if q else "All Topics"
+    _ensure_selection_valid()
+
+
+def _on_parent_change():
+    # Child options depend on parent — clear the slot when parent changes.
+    st.session_state.pop("sel_child_pills", None)
+    # Tag click clears the search box (last filter wins).
+    st.session_state["tag_search_raw"] = ""
+    parent = st.session_state.get("sel_parent_pills")
+    st.session_state["filtered-topics"] = _ids_from_tag(parent, None)
+    st.session_state["current_filter"] = _filter_label_for_tag(parent, None)
+    _ensure_selection_valid()
+
+
+def _on_child_change():
+    # Tag click clears the search box (last filter wins).
+    st.session_state["tag_search_raw"] = ""
+    parent = st.session_state.get("sel_parent_pills")
+    child = st.session_state.get("sel_child_pills")
+    st.session_state["filtered-topics"] = _ids_from_tag(parent, child)
+    st.session_state["current_filter"] = _filter_label_for_tag(parent, child)
+    _ensure_selection_valid()
+
+
+# --- One-time URL restore: seed widget keys + filter, before widgets render -
+# Marker key prevents re-running on subsequent reruns within the session.
+
+def _init_from_url():
+    if st.session_state.get("_url_restored"):
+        return
+    st.session_state["_url_restored"] = True
+
+    qp_search = st.query_params.get("s") or ""
+    qp_q = st.query_params.get("q") or ""
+    qp_parent = qp_child = None
+    qp_topic_idx = 0
+
+    if qp_q.lstrip("-").isdigit():
+        qp_topic_idx = max(0, int(qp_q) - 1)
+    elif qp_q:
+        parts = qp_q.split(".")
+        qp_parent = parts[0] if parts else None
+        if len(parts) >= 2 and parts[1].lstrip("-").isdigit():
+            qp_topic_idx = max(0, int(parts[1]) - 1)
+        else:
+            qp_child = parts[1] if len(parts) >= 2 else None
+            try:
+                qp_topic_idx = max(0, int(parts[2]) - 1) if len(parts) >= 3 else 0
+            except (ValueError, TypeError):
+                qp_topic_idx = 0
+
+    if qp_search:
+        st.session_state["tag_search_raw"] = qp_search
+    if qp_parent:
+        st.session_state["sel_parent_pills"] = qp_parent
+    if qp_child:
+        st.session_state["sel_child_pills"] = qp_child
+
+    if qp_search:
+        filtered = _ids_from_search(qp_search)
+        st.session_state["current_filter"] = f"🔍 {qp_search}"
+    elif qp_parent:
+        filtered = _ids_from_tag(qp_parent, qp_child)
+        st.session_state["current_filter"] = _filter_label_for_tag(qp_parent, qp_child)
+    else:
+        filtered = [t.topic_id for t in get_topics(superset_path)]
+        st.session_state["current_filter"] = "All Topics"
+
+    st.session_state["filtered-topics"] = filtered
+    if filtered:
+        st.session_state["selected-topic-id"] = filtered[min(qp_topic_idx, len(filtered) - 1)]
+
+
+_init_from_url()
+
+
 # Tags Navigation Container Pane
 with st.sidebar.container(border=True):
     st.markdown('<div data-testid="tags-cloud-container"></div>', unsafe_allow_html=True)
     st.markdown("**🏷️ Tags**")
 
-    # Restore persisted selections from URL.
-    # Formats: ?q=parent.child.N  ?q=parent.N  ?q=N (no-tag, index only)  ?s=searchterm
-    _qp_search = st.query_params.get("s") or ""
-    _qp_val = st.query_params.get("q") or ""
-
-    # Pure number → no tag selected, just a topic index
-    if _qp_val.lstrip("-").isdigit():
-        _qp_parent = None
-        _qp_child = None
-        _qp_topic_idx = max(0, int(_qp_val) - 1)
-    else:
-        _qp_parts = _qp_val.split(".") if _qp_val else []
-        _qp_parent = _qp_parts[0] if len(_qp_parts) >= 1 else None
-        # Second segment: numeric → 1-based index (no child); alphabetic → child tag
-        if len(_qp_parts) >= 2 and _qp_parts[1].lstrip("-").isdigit():
-            _qp_child = None
-            _qp_topic_idx = max(0, int(_qp_parts[1]) - 1)
-        else:
-            _qp_child = _qp_parts[1] if len(_qp_parts) >= 2 else None
-            try:
-                _qp_topic_idx = max(0, int(_qp_parts[2]) - 1) if len(_qp_parts) >= 3 else 0
-            except (ValueError, TypeError):
-                _qp_topic_idx = 0
-
-    sel_parent = None
-    sel_child = None
-
     if os.path.exists(superset_path):
         root_tags = get_tags(superset_path)
         if root_tags:
-            sel_parent = st.pills(
+            st.pills(
                 "Category",
                 options=root_tags,
                 selection_mode="single",
                 key="sel_parent_pills",
                 label_visibility="collapsed",
-                default=_qp_parent if _qp_parent in root_tags else None,
+                on_change=_on_parent_change,
             )
-
-            if sel_parent:
-                child_tags = get_tags(superset_path, sel_parent)
+            _parent = st.session_state.get("sel_parent_pills")
+            if _parent:
+                child_tags = get_tags(superset_path, _parent)
                 if child_tags:
                     st.markdown(
-                        f"<div style='font-size:11px;color:#888;margin:4px 0 2px'>↳ {sel_parent}</div>",
+                        f"<div style='font-size:11px;color:#888;margin:4px 0 2px'>↳ {_parent}</div>",
                         unsafe_allow_html=True,
                     )
-                    # Only restore child default when it belongs to this parent
-                    _child_default = _qp_child if _qp_child in child_tags else None
-                    sel_child = st.pills(
+                    st.pills(
                         "Subcategory",
                         options=child_tags,
                         selection_mode="single",
-                        key=f"sel_child_pills_{sel_parent}",
+                        key="sel_child_pills",
                         label_visibility="collapsed",
-                        default=_child_default,
+                        on_change=_on_child_change,
                     )
-
     else:
         st.error(f"❌ Superset file not found: {superset_path}")
 
-# Derive active tag; detect tag change to know whether to reset topic position
-_active_tag = (
-    f"{sel_parent}-{sel_child}" if sel_parent and sel_child else sel_parent
-)
-_prev_active_tag = st.session_state["_active_tag"]
-_tag_changed = _prev_active_tag != _active_tag
-if _tag_changed:
-    st.session_state["_active_tag"] = _active_tag
-    st.session_state.pop("selected_topic", None)
-    st.session_state.pop("selected_topic_tag", None)
-    st.session_state.pop("selected_topic_idx", None)
-    st.session_state.pop("tag_search_raw", None)
 
-# Restore search term from URL on first load (before the widget is instantiated)
-if _qp_search and "tag_search_raw" not in st.session_state:
-    st.session_state["tag_search_raw"] = _qp_search
-
-# Topics pane — search input at top; list shows search results or tag-filtered topics
+# Topics pane — search input at top; list shows whatever filtered-topics holds.
 with st.sidebar.container(border=True):
-    _search_raw = st.text_input(
+    st.text_input(
         "Search",
         key="tag_search_raw",
         label_visibility="collapsed",
         placeholder="🔍 Question or tag keyword…",
+        on_change=_on_search_change,
     )
 
-    _search = _search_raw.strip().lower()
-
-    if _search and os.path.exists(superset_path):
-        # Search mode: filter all topics by label or tags
-        # CACHE FIX: Clear @st.cache_data before unfiltered search
-        # Issue: get_topics() has @st.cache_data decorator. When called with a tag parameter earlier
-        # (e.g., get_topics(path, "databases")), the cache stores 341 filtered results.
-        # Later, calling get_topics(path) with no tag should get all 349 topics, but Streamlit's
-        # cache doesn't properly distinguish between tag=None and tag="specific_tag", causing
-        # the filtered cache to be reused. Explicit clear() forces a fresh read from file.
-        get_topics.clear()
-        _all_topics = get_topics(superset_path, tag=None)
-        _topics = [
-            t for t in _all_topics
-            if _search in t.get("label", "").lower()
-            or _search in t.get("tags", "").lower()
-        ]
-        # Debug: log search results
-        print(f"🔍 Search: '{_search}' | Total topics: {len(_all_topics)} | Matches: {len(_topics)}", file=sys.stderr)
-        _header = f"**🔍** `{len(_topics)}` result(s)"
-        st.session_state["_search_mode"] = True
-        st.session_state["_search_topics"] = _topics
+    _filtered: list[str] = st.session_state.get("filtered-topics", [])
+    _topic_by_id = {t.topic_id: t for t in get_topics(superset_path)}
+    _cf = st.session_state.get("current_filter", "All Topics")
+    if _cf.startswith("🔍 "):
+        st.markdown(f"**{_cf}** `{len(_filtered)}` result(s)")
     else:
-        # Normal mode: filter by active tag
-        _topics = get_topics(superset_path, _active_tag)
-        if _active_tag:
-            _header = f"**📋 {_active_tag.replace('-', ' → ')}** `{len(_topics)}`"
-        else:
-            _header = f"**📋 All Topics** `{len(_topics)}`"
-        st.session_state["_search_mode"] = False
-        st.session_state.pop("_search_topics", None)
+        st.markdown(f"**📋 {_cf}** `{len(_filtered)}`")
 
-    st.markdown(_header)
-
-    if _topics:
-        _radio_key = f"topic_radio_{_search or _active_tag}"
-        _sel_topic_label = st.session_state.get("selected_topic", {}).get("label", "")
-
-        # If Prev/Next requested a programmatic jump, pre-set the radio key
-        # BEFORE the widget is instantiated (setting after is forbidden by Streamlit).
-        _pending = st.session_state.pop("_pending_nav_label", None)
-        if _pending is not None:
-            st.session_state[_radio_key] = _pending
-
-        if not _search:
-            # Compute fallback index for tag navigation (URL restore / tag change)
-            if _tag_changed or not _sel_topic_label:
-                _is_url_restore = _tag_changed and _prev_active_tag is None
-                _radio_idx = min(_qp_topic_idx, len(_topics) - 1) if (not _tag_changed or _is_url_restore) else 0
-            else:
-                _radio_idx = next(
-                    (i for i, t in enumerate(_topics) if t["label"] == _sel_topic_label), 0,
-                )
-        else:
-            _radio_idx = next(
-                (i for i, t in enumerate(_topics) if t["label"] == _sel_topic_label), 0,
-            )
-
-        _chosen = st.radio(
+    if _filtered:
+        st.radio(
             "Topics",
-            options=[t["label"] for t in _topics],
-            index=_radio_idx,
-            key=_radio_key,
+            options=_filtered,
+            format_func=lambda tid: _topic_by_id[tid].label if tid in _topic_by_id else tid,
+            key="selected-topic-id",
             label_visibility="collapsed",
         )
-        _chosen_topic = next((t for t in _topics if t["label"] == _chosen), None)
-        if _chosen_topic:
-            _chosen_idx = _topics.index(_chosen_topic)
-            st.session_state["selected_topic"] = _chosen_topic
-            st.session_state["selected_topic_tag"] = (
-                _chosen_topic.get("tags", "").split(",")[0].strip() if _search else _active_tag
-            )
-            st.session_state["selected_topic_idx"] = _chosen_idx
     elif _search:
         st.caption(f"No results for `{_search}`")
 
 
 # Sync full navigation state to URL.
 # ?s=term when search active; ?q=parent.child.N / ?q=parent.N / ?q=N otherwise.
-def _build_nav_q() -> str | None:
-    idx = st.session_state.get("selected_topic_idx")
-    if not sel_parent:
-        # No tag: encode bare index so the question survives a reload
+def _build_nav_q() -> Optional[str]:
+    parent = st.session_state.get("sel_parent_pills")
+    child = st.session_state.get("sel_child_pills") if parent else None
+    selected = st.session_state.get("selected-topic-id")
+    filtered: list[str] = st.session_state.get("filtered-topics", [])
+    idx = filtered.index(selected) if selected in filtered else 0
+
+    if not parent:
         return str(idx + 1) if idx else None
-    parts = [sel_parent]
-    if sel_child:
-        parts.append(sel_child)
+    parts = [parent]
+    if child:
+        parts.append(child)
     if idx:
         parts.append(str(idx + 1))
     return ".".join(parts)
 
 
+_search = st.session_state.get("tag_search_raw", "").strip()
 _nav_q = _build_nav_q()
 st.query_params.clear()
 if _search:
@@ -678,171 +760,9 @@ st.title(f"📚 {APP_TITLE}")
 st.markdown("---")
 
 # Display selected topic from tags navigation
-if "selected_topic" in st.session_state:
-    topic = st.session_state.selected_topic
-    tag = st.session_state.get("selected_topic_tag") or _active_tag
-    tag_display = tag.replace('-', ' → ').title() if tag else "All Topics"
-    st.header(f"📚 {tag_display}")
-
-    # Prev / Next at the top so their position is stable regardless of content height
-    if "selected_topic_idx" not in st.session_state:
-        st.session_state.selected_topic_idx = 0
-
-    # Use search-filtered topics if in search mode, otherwise use tag-filtered topics
-    if st.session_state.get("_search_mode"):
-        topics = st.session_state.get("_search_topics", [])
-    else:
-        topics = get_topics(superset_path, tag)
-
-    if len(topics) > 1:
-        def _navigate(new_idx: int) -> None:
-            new_topic = topics[new_idx]
-            st.session_state.selected_topic_idx = new_idx
-            st.session_state.selected_topic = new_topic
-            st.session_state["_pending_nav_label"] = new_topic["label"]
-            st.rerun()
-
-        with st.container(key="nav-controls"):
-            if st.button("← Prev", key="btn-prev"):
-                if st.session_state.selected_topic_idx > 0:
-                    _navigate(st.session_state.selected_topic_idx - 1)
-            st.text(f"Q {st.session_state.selected_topic_idx + 1}/{len(topics)}")
-            if st.button("Next →", key="btn-next"):
-                if st.session_state.selected_topic_idx < len(topics) - 1:
-                    _navigate(st.session_state.selected_topic_idx + 1)
-
-    st.subheader(topic['label'])
-    st.caption(f"📂 {topic['section']}")
-    if topic.get('tags'):
-        st.caption(f"🏷️ **Tags:** {topic['tags']}")
-    st.markdown(f"{topic['description']}")
-    st.markdown("---")
-
-    # Load metadata and show all content sections
-    try:
-        with open(superset_path, 'r') as f:
-            data = json.load(f)
-
-        metadata = None
-        question_id = None
-        section_id = None
-        for section_key, section in data.get('children', {}).items():
-            for q_key, question in section.get('children', {}).items():
-                if question.get('label') == topic['label']:
-                    metadata = question.get('metadata', {})
-                    question_id = question.get('id', q_key)
-                    section_id = section_key
-                    break
-
-        if metadata:
-
-            def _section_header(title: str, flag_key: str, meta_key: str):
-                with st.container(key=f"section-header-{meta_key}"):
-                    st.markdown(title)
-                    if st.button("🚩", key=flag_key, help=f"Flag {meta_key}"):
-                        flag_item(section_id, question_id, meta_key)
-
-            if metadata.get('mermaid'):
-                st.markdown("### 📊 Diagram")
-                try:
-                    _mkey = re.sub(r'[^a-z0-9]', '_', topic['label'].lower())[:40]
-                    render_mermaid(metadata['mermaid'], key=_mkey)
-                except Exception:
-                    st.code(metadata['mermaid'], language='mermaid')
-
-            if metadata.get('answer'):
-                _section_header("### 📝 Answer", "flag_answer", "answer")
-                st.markdown(metadata['answer'])
-
-            # Only metadata.code is supported (see metadata.get(code) constraint)
-            if metadata.get('code'):
-                _section_header("### 💻 Code", "flag_code", "code")
-                st.code(metadata['code'], language='python')
-
-    except Exception as e:
-        st.error(f"Error loading question metadata: {e}")
-
-# Display based on tag selection (new superset navigation)
-if "selected_parent_tag" in st.session_state and "selected_child" in st.session_state:
-    parent = st.session_state.selected_parent_tag
-    child = st.session_state.selected_child
-
-    st.header(f"📚 {parent.title()} → {child}")
-    st.markdown("---")
-
-    # Load and display questions for this tag combination
-    try:
-        with open(superset_path, 'r') as f:
-            data = json.load(f)
-
-        tag_to_find = f"{parent}-{child}"
-        questions_found = []
-
-        # Find all questions with this tag
-        for section_key, section in data.get('children', {}).items():
-            for q_key, question in section.get('children', {}).items():
-                tags_str = question.get('metadata', {}).get('tags', '')
-                if tags_str and tag_to_find in tags_str:
-                    questions_found.append({
-                        'section': section.get('label', section_key),
-                        'label': question.get('label', q_key),
-                        'description': question.get('description', ''),
-                        'metadata': question.get('metadata', {})
-                    })
-
-        if questions_found:
-            st.write(f"**Found {len(questions_found)} question(s)**")
-
-            if "current_question_idx" not in st.session_state:
-                st.session_state.current_question_idx = 0
-
-            with st.container(key="nav-controls-search"):
-                if st.button("← Prev", key="prev-search"):
-                    if st.session_state.current_question_idx > 0:
-                        st.session_state.current_question_idx -= 1
-                        st.rerun()
-                st.text(f"Q {st.session_state.current_question_idx + 1}/{len(questions_found)}")
-                if st.button("Next →", key="next-search"):
-                    if st.session_state.current_question_idx < len(questions_found) - 1:
-                        st.session_state.current_question_idx += 1
-                        st.rerun()
-
-            current_q = questions_found[st.session_state.current_question_idx]
-            st.markdown("---")
-            st.subheader(f"Q{st.session_state.current_question_idx + 1}: {current_q['label']}")
-            st.caption(f"📂 {current_q['section']}")
-            st.markdown(f"**{current_q['description']}**")
-
-            metadata = current_q['metadata']
-
-            if metadata.get('answer'):
-                st.markdown("### 📝 Answer")
-                st.markdown(metadata['answer'])
-
-            if metadata.get('mermaid'):
-                st.markdown("### 📊 Diagram")
-                try:
-                    _mkey = re.sub(r'[^a-z0-9]', '_', current_q['label'].lower())[:40]
-                    render_mermaid(metadata['mermaid'], key=_mkey)
-                except Exception:
-                    st.code(metadata['mermaid'], language='mermaid')
-
-            if metadata.get('code'):
-                st.markdown("### 💻 Code")
-                st.code(metadata['code'], language='python')
-
-            if metadata.get('tags'):
-                st.markdown("---")
-                st.caption(f"🏷️ **Tags:** {metadata['tags']}")
-
-        else:
-            st.info(f"No questions found for tag: {tag_to_find}")
-
-    except Exception as e:
-        st.error(f"Error loading questions: {e}")
-
-else:
-    pass  # no additional content for this state combination
+_selected_id = st.session_state.get("selected-topic-id")
+if _selected_id:
+    render_topic(_selected_id)
 
 
 # ============================================================================

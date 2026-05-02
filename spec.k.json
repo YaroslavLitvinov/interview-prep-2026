@@ -94,6 +94,12 @@
           "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json || { echo 'File not found'; exit 1; }; invalid=$(jq '[.children // {} | to_entries[] | .value.children // {} | to_entries[] | select(.value.metadata.tags != null and .value.metadata.tags != \"\") | .value.metadata.tags | split(\",\") | .[] | select((gsub(\" +\"; \"\") | split(\"-\") | length) > 2)] | length' $PROJECT_ROOT/prep/superset.k.json); test \"$invalid\" -eq 0 || { echo \"Tags with multiple hyphens: $invalid\"; exit 1; }",
           "description": "Format: each tag (separated by comma) must have max one hyphen (parent-child format)",
           "fails_count": 1
+        },
+        "constraint_tags_no_dots": {
+          "id": "constraint_tags_no_dots",
+          "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json || { echo 'File not found'; exit 1; }; invalid=$(jq '[.children // {} | to_entries[] | (.value.metadata.tags // \"\" | split(\",\") | map(ltrimstr(\" \") | rtrimstr(\" \")) | map(select(. != \"\" and contains(\".\")))), (.value.children // {} | to_entries[] | (.value.metadata.tags // \"\" | split(\",\") | map(ltrimstr(\" \") | rtrimstr(\" \")) | map(select(. != \"\" and contains(\".\")))))] | flatten | length' $PROJECT_ROOT/prep/superset.k.json); test \"$invalid\" -eq 0 || { echo \"Tags containing dots found: $invalid\"; exit 1; }",
+          "description": "Negative: no tags (section or question) must contain a dot (.) character",
+          "fails_count": 1
         }
       }
     },
@@ -119,6 +125,25 @@
           "id": "constraint_app_handles_only_code",
           "cmd": "grep -q \"metadata.get(code)\" $PROJECT_ROOT/app/interview_prep_app.py && ! grep -q \"for lang in.*python.*javascript\" $PROJECT_ROOT/app/interview_prep_app.py || { echo \"App should only handle metadata.code\"; exit 1; }",
           "description": "Behavioral: app must only render metadata.code, not separate language keys",
+          "fails_count": 1
+        }
+      }
+    },
+    "tags_canonical_list": {
+      "type": "Feature",
+      "model_version": 1,
+      "id": "tags_canonical_list",
+      "description": "Superset root .description holds the canonical, comma-separated list of allowed tags; each tag is one alphanumeric token, optionally followed by - and a second alphanumeric token.",
+      "goals": [
+        "Root .description is the single source of truth for allowed tags",
+        "Each tag matches ^[a-z0-9]+(-[a-z0-9]+)?$ (lowercase alphanumeric, optional single hyphen for parent-child)",
+        "Used downstream by process_flags.py for Aho-Corasick re-tagging of questions"
+      ],
+      "constraints": {
+        "constraint_root_description_holds_tags": {
+          "id": "constraint_root_description_holds_tags",
+          "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json || { echo File not found; exit 1; }; desc=$(jq -r \".description // \\\"\\\"\" $PROJECT_ROOT/prep/superset.k.json); test -n \"$desc\" || { echo Empty description; exit 1; }; bad=$(printf %s \"$desc\" | tr , \"\\n\" | sed \"s/^[[:space:]]*//;s/[[:space:]]*$//\" | grep -v ^$ | grep -vE \"^[a-z0-9]+(-[a-z0-9]+)?$\" | head -5); test -z \"$bad\" || { echo Invalid tags found: $bad; exit 1; }; count=$(printf %s \"$desc\" | tr , \"\\n\" | sed \"s/^[[:space:]]*//;s/[[:space:]]*$//\" | grep -vc ^$); test \"$count\" -gt 0 || { echo No tags in description; exit 1; }",
+          "description": "Structural: root .description must be a non-empty comma-separated list of tags matching ^[a-z0-9]+(-[a-z0-9]+)?$",
           "fails_count": 1
         }
       }
