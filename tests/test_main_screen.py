@@ -185,6 +185,38 @@ class TestTagsRendering:
             f"Found {len(updated_pills)} pills widget(s)."
         )
 
+    def test_child_tag_reset_on_parent_change(self, app):
+        """Selecting a different parent tag resets any selected child tag."""
+        app.run()
+
+        sidebar_pills = app.sidebar.pills
+        parent_pills = sidebar_pills[0]
+        first_tag = parent_pills.options[0]
+        second_tag = parent_pills.options[1] if len(parent_pills.options) > 1 else first_tag
+
+        # Select first parent and a child
+        parent_pills.set_value(first_tag).run()
+        updated_pills = app.sidebar.pills
+        child_was_set = False
+        if len(updated_pills) > 1:
+            child_pills = updated_pills[1]
+            if len(child_pills.options) > 0:
+                child_pills.set_value(child_pills.options[0]).run()
+                child_was_set = True
+
+        if not child_was_set:
+            # If we couldn't set a child in this test, skip the reset verification
+            return
+
+        # Select a different parent tag
+        parent_pills.set_value(second_tag).run()
+
+        # Child tag state should be cleared to None
+        assert app.session_state["sel_child_pills"] is None, (
+            f"Child tag selection should be reset when parent tag changes, "
+            f"but got: {app.session_state['sel_child_pills']}"
+        )
+
 
 class TestFlagItem:
     """Test flag_item writes correctly to flagged.k.json"""

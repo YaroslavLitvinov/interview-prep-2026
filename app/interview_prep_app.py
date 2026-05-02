@@ -551,11 +551,15 @@ def _on_search_change():
 
 
 def _on_parent_change():
-    # Child options depend on parent — clear the slot when parent changes.
-    st.session_state.pop("sel_child_pills", None)
+    # Child options depend on parent — explicitly clear the child selection.
+    parent = st.session_state.get("sel_parent_pills")
+    if parent:
+        # Clear child tag selection when parent changes
+        st.session_state["sel_child_pills"] = None
+    else:
+        st.session_state.pop("sel_child_pills", None)
     # Tag click clears the search box (last filter wins).
     st.session_state["tag_search_raw"] = ""
-    parent = st.session_state.get("sel_parent_pills")
     st.session_state["filtered-topics"] = _ids_from_tag(parent, None)
     st.session_state["current_filter"] = _filter_label_for_tag(parent, None)
     _ensure_selection_valid()

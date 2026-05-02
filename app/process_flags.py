@@ -138,11 +138,14 @@ def _retag_stale(force: bool = False) -> int:
             keyword_to_tags[keyword].append(tag)
 
     # Build automaton with keywords (for matching in question text)
+    # Normalize hyphens to spaces for consistent matching
     automaton = ahocorasick.Automaton()
     for tag in canonical:
         # If it's a composite tag, extract keyword; otherwise use as-is
         keyword = tag.split('/')[1] if '/' in tag else tag
-        automaton.add_word(keyword, keyword)
+        # Normalize hyphens to spaces for matching
+        keyword_normalized = keyword.replace('-', ' ')
+        automaton.add_word(keyword_normalized, keyword)
     automaton.make_automaton()
 
     # First pass: collect matched tags for all questions
@@ -175,15 +178,25 @@ def _retag_stale(force: bool = False) -> int:
             elif code_field:
                 code_text = str(code_field)
 
+            code_text = ''
+            code_field = md.get('code')
+            if isinstance(code_field, dict):
+                code_text = ' '.join(str(v) for v in code_field.values() if v)
+            elif code_field:
+                code_text = str(code_field)
+
             text = ((q.get('label') or '') + '\n\n' + (q.get('description') or '') + '\n\n' + (md.get('answer') or '') + '\n\n' + code_text).lower()
+            # Normalize hyphens to spaces for matching (treat "data-structure" and "data structure" as equivalent)
+            text_normalized = text.replace('-', ' ')
+
             matched = set()
             # Deterministic hash for distributing alternatives
             q_hash = hash((sk, qk)) % 100
-            for end_idx, keyword in automaton.iter(text):
+            for end_idx, keyword in automaton.iter(text_normalized):
                 start = end_idx - len(keyword) + 1
                 # Word-boundary check — keyword must not extend into adjacent alnum chars.
-                before_ok = start == 0 or not text[start - 1].isalnum()
-                after_ok = end_idx + 1 >= len(text) or not text[end_idx + 1].isalnum()
+                before_ok = start == 0 or not text_normalized[start - 1].isalnum()
+                after_ok = end_idx + 1 >= len(text_normalized) or not text_normalized[end_idx + 1].isalnum()
                 if before_ok and after_ok:
                     # Map keyword to composite tags
                     if keyword in keyword_to_tags:
