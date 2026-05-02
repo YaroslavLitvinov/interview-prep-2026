@@ -2,7 +2,7 @@
   "type": "Spec",
   "model_version": 1,
   "version": 1,
-  "description": "Specification description",
+  "description": "Interview Prep App \u2014 Interactive learning platform for technical interview preparation. Provides curated questions across system design, behavioral, coding, and company-specific topics. Features Mermaid diagrams for visualization, comprehensive answers with trade-offs, working code examples, and hierarchical tag-based navigation for efficient topic exploration.",
   "contains_unverified_constraints": false,
   "features": {
     "main_screen_rendering": {
@@ -91,8 +91,8 @@
         },
         "constraint_tags_max_one_hyphen": {
           "id": "constraint_tags_max_one_hyphen",
-          "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json || { echo 'File not found'; exit 1; }; invalid=$(jq '[.children // {} | to_entries[] | .value.children // {} | to_entries[] | select(.value.metadata.tags != null and .value.metadata.tags != \"\") | .value.metadata.tags | split(\",\") | .[] | select((gsub(\" +\"; \"\") | split(\"-\") | length) > 2)] | length' $PROJECT_ROOT/prep/superset.k.json); test \"$invalid\" -eq 0 || { echo \"Tags with multiple hyphens: $invalid\"; exit 1; }",
-          "description": "Format: each tag (separated by comma) must have max one hyphen (parent-child format)",
+          "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json || { echo 'File not found'; exit 1; }; invalid=$(jq '[.children // {} | to_entries[] | .value.children // {} | to_entries[] | select(.value.metadata.tags != null and .value.metadata.tags != \"\") | .value.metadata.tags | split(\",\") | .[] | select((gsub(\" +\"; \"\") | split(\"/\") | length) > 2)] | length' $PROJECT_ROOT/prep/superset.k.json); test \"$invalid\" -eq 0 || { echo \"Tags with multiple slashes: $invalid\"; exit 1; }",
+          "description": "Format: each tag (separated by comma) must have max one slash (parent/child format)",
           "fails_count": 1
         },
         "constraint_tags_no_dots": {
@@ -100,7 +100,24 @@
           "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json || { echo 'File not found'; exit 1; }; invalid=$(jq '[.children // {} | to_entries[] | (.value.metadata.tags // \"\" | split(\",\") | map(ltrimstr(\" \") | rtrimstr(\" \")) | map(select(. != \"\" and contains(\".\")))), (.value.children // {} | to_entries[] | (.value.metadata.tags // \"\" | split(\",\") | map(ltrimstr(\" \") | rtrimstr(\" \")) | map(select(. != \"\" and contains(\".\")))))] | flatten | length' $PROJECT_ROOT/prep/superset.k.json); test \"$invalid\" -eq 0 || { echo \"Tags containing dots found: $invalid\"; exit 1; }",
           "description": "Negative: no tags (section or question) must contain a dot (.) character",
           "fails_count": 1
+        },
+        "constraint_parent_max_20_children_fixed": {
+          "id": "constraint_parent_max_20_children_fixed",
+          "cmd": "cd $PROJECT_ROOT && python3 << 'PYEOF'\nimport json\nwith open('prep/superset.k.json') as f:\n    data = json.load(f)\nparent_children = {}\nfor section in data.get('children', {}).values():\n    for question in section.get('children', {}).values():\n        tags = question.get('metadata', {}).get('tags', '')\n        if tags:\n            for tag in tags.split(','):\n                tag = tag.strip()\n                if '/' in tag:\n                    parent = tag.split('/')[0]\n                    child = tag.split('/')[1]\n                    if parent not in parent_children:\n                        parent_children[parent] = set()\n                    parent_children[parent].add(child)\nviolations = [p for p, children in parent_children.items() if len(children) > 20]\nif violations:\n    print(f\"Parents with > 20 children: {violations}\")\n    exit(1)\nexit(0)\nPYEOF",
+          "description": "Structural: each parent tag (before /) must have at most 20 unique child tags. Counts unique children per parent and fails if any exceed 20.",
+          "fails_count": 1
+        },
+        "constraint_primary_tags_max_20_topics": {
+          "id": "constraint_primary_tags_max_20_topics",
+          "cmd": "cd $PROJECT_ROOT && python3 << 'PYEOF'\nimport json\nwith open('prep/superset.k.json') as f:\n    data = json.load(f)\nprimary_tag_counts = {}\nfor section in data.get('children', {}).values():\n    for question in section.get('children', {}).values():\n        tags = question.get('metadata', {}).get('tags', '')\n        if tags:\n            primary_tags = set()\n            for tag in tags.split(','):\n                tag = tag.strip()\n                if tag.count('/') >= 1:\n                    parts = tag.split('/')\n                    primary_tag = f\"{parts[0]}/{parts[1]}\"\n                    primary_tags.add(primary_tag)\n            for pt in primary_tags:\n                primary_tag_counts[pt] = primary_tag_counts.get(pt, 0) + 1\nviolations = {tag: count for tag, count in primary_tag_counts.items() if count > 20}\nif violations:\n    sorted_v = sorted(violations.items(), key=lambda x: -x[1])\n    print(f\"Primary tags exceeding 20 topics: {len(violations)}\")\n    for tag, count in sorted_v[:5]:\n        print(f\"  {tag}: {count}\")\n    exit(1)\nexit(0)\nPYEOF",
+          "description": "Structural: each primary tag (Parent/Child format) can have at most 20 questions. Counts unique primary tags per question to avoid double-counting nested tags. HINT: If violations occur, add more metadata.superset_tags to split large primary tags into smaller ones, then rerun process_flags.py --force to rebalance tagging.",
+          "fails_count": 1
         }
+      },
+      "metadata": {
+        "depends_on": [
+          "superset_tagging"
+        ]
       }
     },
     "metadata_keys_standardization": {
@@ -129,21 +146,21 @@
         }
       }
     },
-    "tags_canonical_list": {
+    "superset_tagging": {
       "type": "Feature",
       "model_version": 1,
-      "id": "tags_canonical_list",
-      "description": "Superset root .description holds the canonical, comma-separated list of allowed tags; each tag is one alphanumeric token, optionally followed by - and a second alphanumeric token.",
+      "id": "superset_tagging",
+      "description": "Auto-tag all questions via Aho-Corasick matching against canonical tags",
       "goals": [
-        "Root .description is the single source of truth for allowed tags",
-        "Each tag matches ^[a-z0-9]+(-[a-z0-9]+)?$ (lowercase alphanumeric, optional single hyphen for parent-child)",
-        "Used downstream by process_flags.py for Aho-Corasick re-tagging of questions"
+        "Run process_flags.py --force to match keywords in question text against canonical tag list",
+        "All 348 questions tagged with composite tags (parent/child format with /)",
+        "Tags match question content using Aho-Corasick pattern matching"
       ],
       "constraints": {
-        "constraint_root_description_holds_tags": {
-          "id": "constraint_root_description_holds_tags",
-          "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json || { echo File not found; exit 1; }; desc=$(jq -r \".description // \\\"\\\"\" $PROJECT_ROOT/prep/superset.k.json); test -n \"$desc\" || { echo Empty description; exit 1; }; bad=$(printf %s \"$desc\" | tr , \"\\n\" | sed \"s/^[[:space:]]*//;s/[[:space:]]*$//\" | grep -v ^$ | grep -vE \"^[a-z0-9]+(-[a-z0-9]+)?$\" | head -5); test -z \"$bad\" || { echo Invalid tags found: $bad; exit 1; }; count=$(printf %s \"$desc\" | tr , \"\\n\" | sed \"s/^[[:space:]]*//;s/[[:space:]]*$//\" | grep -vc ^$); test \"$count\" -gt 0 || { echo No tags in description; exit 1; }",
-          "description": "Structural: root .description must be a non-empty comma-separated list of tags matching ^[a-z0-9]+(-[a-z0-9]+)?$",
+        "constraint_retag_all_questions": {
+          "id": "constraint_retag_all_questions",
+          "cmd": "test -f $PROJECT_ROOT/prep/superset.k.json && cd $PROJECT_ROOT && python3 app/process_flags.py --force > /dev/null 2>&1 && invalid=$(jq \"[.children // {} | to_entries[] | .value.children // {} | to_entries[] | select(.value.metadata == null or .value.metadata.tags == null or .value.metadata.tags == \\\"\\\") | .key] | length\" prep/superset.k.json) && test \"$invalid\" -eq 0 || { echo \"Questions without tags after re-tag: $invalid\"; exit 1; }",
+          "description": "Behavioral: process_flags.py --force must complete successfully without errors",
           "fails_count": 1
         }
       }

@@ -245,13 +245,13 @@ get_topics.clear = get_topics.cache_clear
 
 def filter_by_tag(topics: list[BasicTopic], tag: Optional[str]) -> list[BasicTopic]:
     """Filter topics by tag. None/empty → all topics.
-    A parent tag (e.g. 'language') matches any 'language-*'.
-    A full tag (e.g. 'language-python') matches that exact tag string.
+    A parent tag (e.g. 'language') matches any 'language/*'.
+    A full tag (e.g. 'language/python') matches that exact tag string.
     """
     if not tag:
         return topics
-    is_full = '-' in tag
-    prefix = tag + '-'
+    is_full = '/' in tag
+    prefix = tag + '/'
     out: list[BasicTopic] = []
     for t in topics:
         if not t.tags:
@@ -305,17 +305,17 @@ def get_tags(json_file_path, tag=None):
                     all_tags.extend(tags)
 
         if tag is None:
-            # Return unique parent tags (part before '-')
+            # Return unique parent tags (part before '/')
             parent_tags = set()
             for full_tag in all_tags:
-                if '-' in full_tag:
-                    parent = full_tag.split('-')[0]
+                if '/' in full_tag:
+                    parent = full_tag.split('/')[0]
                     parent_tags.add(parent)
             return sorted(list(parent_tags))
         else:
-            # Return nested tags for specified parent (part after '-')
+            # Return nested tags for specified parent (part after '/')
             nested_tags = set()
-            prefix = tag + '-'
+            prefix = tag + '/'
             for full_tag in all_tags:
                 if full_tag.startswith(prefix):
                     nested = full_tag[len(prefix):]
@@ -525,7 +525,7 @@ def _ids_from_search(q: str) -> list[str]:
 
 
 def _ids_from_tag(parent: Optional[str], child: Optional[str]) -> list[str]:
-    tag = f"{parent}-{child}" if parent and child else parent
+    tag = f"{parent}/{child}" if parent and child else parent
     return [t.topic_id for t in filter_by_tag(get_topics(superset_path), tag)]
 
 
@@ -670,6 +670,7 @@ with st.sidebar.container(border=True):
     )
 
     _filtered: list[str] = st.session_state.get("filtered-topics", [])
+    _search = st.session_state.get("tag_search_raw", "").strip()
     _topic_by_id = {t.topic_id: t for t in get_topics(superset_path)}
     _cf = st.session_state.get("current_filter", "All Topics")
     if _cf.startswith("🔍 "):
@@ -708,7 +709,6 @@ def _build_nav_q() -> Optional[str]:
     return ".".join(parts)
 
 
-_search = st.session_state.get("tag_search_raw", "").strip()
 _nav_q = _build_nav_q()
 st.query_params.clear()
 if _search:

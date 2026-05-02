@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Process flagged items: run Claude to improve or create questions in superset.k.json,
 then stamp changed questions and re-tag stale ones via Aho-Corasick."""
+import argparse
 import hashlib
 import json
 import os
@@ -96,10 +97,11 @@ def _stamp_changed_questions(before: dict) -> int:
     return len(changed)
 
 
-def _retag_stale() -> int:
+def _retag_stale(force: bool = False) -> int:
     """For each question whose timestamp > root.timestamp and tags_ok != true,
     Aho-Corasick-match the canonical tags from root.description against
     description + metadata.answer, then write metadata.tags + tags_ok=true.
+    With force=True, ignores timestamp and tags_ok checks and re-tags all questions.
     Returns count re-tagged."""
     try:
         import ahocorasick
@@ -109,20 +111,36 @@ def _retag_stale() -> int:
 
     doc = _load_superset()
     root_md = doc.get('metadata') or {}
-    root_ts_str = root_md.get('timestamp')
-    if not root_ts_str:
-        print("⚠️  Root metadata.timestamp missing; skipping re-tag", file=sys.stderr)
-        return 0
-    root_ts = datetime.fromisoformat(root_ts_str)
+    root_ts_str = root_md.get('timestamp') if not force else None
+    if root_ts_str:
+        root_ts = datetime.fromisoformat(root_ts_str)
+    else:
+        root_ts = None if not force else datetime.min
 
-    canonical = [t.strip() for t in (doc.get('description') or '').split(',') if t.strip()]
+    # Use metadata.superset_tags as canonical tag list, not root.description
+    superset_tags = root_md.get('superset_tags', '')
+    canonical = [t.strip() for t in superset_tags.split(',') if t.strip()]
     if not canonical:
-        print("⚠️  Root .description has no canonical tags; skipping re-tag", file=sys.stderr)
+        print("⚠️  Root .metadata.superset_tags has no canonical tags; skipping re-tag", file=sys.stderr)
         return 0
 
+    # Build keyword-to-composite-tag mapping from metadata.superset_tags
+    keyword_to_tags = {}
+    superset_tags = root_md.get('superset_tags', '')
+    for tag in superset_tags.split(','):
+        tag = tag.strip()
+        if '/' in tag:
+            keyword = tag.split('/')[1]  # Extract child part (e.g., "postgresql" from "database/postgresql")
+            if keyword not in keyword_to_tags:
+                keyword_to_tags[keyword] = []
+            keyword_to_tags[keyword].append(tag)
+
+    # Build automaton with keywords (for matching in question text)
     automaton = ahocorasick.Automaton()
     for tag in canonical:
-        automaton.add_word(tag, tag)
+        # If it's a composite tag, extract keyword; otherwise use as-is
+        keyword = tag.split('/')[1] if '/' in tag else tag
+        automaton.add_word(keyword, keyword)
     automaton.make_automaton()
 
     ops = []
@@ -130,28 +148,35 @@ def _retag_stale() -> int:
     for sk, sec in (doc.get('children') or {}).items():
         for qk, q in (sec.get('children') or {}).items():
             md = q.get('metadata') or {}
-            if md.get('tags_ok'):
-                continue
-            # Candidate if: no timestamp yet (initial migration), or timestamp
-            # newer than root (question edited after canonical list change).
-            ts_str = md.get('timestamp')
-            if ts_str:
-                try:
-                    qts = datetime.fromisoformat(ts_str)
-                except ValueError:
-                    continue
-                if qts <= root_ts:
-                    continue
 
-            text = ((q.get('description') or '') + '\n\n' + (md.get('answer') or '')).lower()
+            # Skip checks if --force flag is used
+            if not force:
+                if md.get('tags_ok'):
+                    continue
+                # Candidate if: no timestamp yet (initial migration), or timestamp
+                # newer than root (question edited after canonical list change).
+                ts_str = md.get('timestamp')
+                if ts_str:
+                    try:
+                        qts = datetime.fromisoformat(ts_str)
+                    except ValueError:
+                        continue
+                    if qts <= root_ts:
+                        continue
+
+            text = ((q.get('label') or '') + '\n\n' + (q.get('description') or '') + '\n\n' + (md.get('answer') or '')).lower()
             matched = set()
-            for end_idx, tag in automaton.iter(text):
-                start = end_idx - len(tag) + 1
-                # Word-boundary check — tag must not extend into adjacent alnum chars.
+            for end_idx, keyword in automaton.iter(text):
+                start = end_idx - len(keyword) + 1
+                # Word-boundary check — keyword must not extend into adjacent alnum chars.
                 before_ok = start == 0 or not text[start - 1].isalnum()
                 after_ok = end_idx + 1 >= len(text) or not text[end_idx + 1].isalnum()
                 if before_ok and after_ok:
-                    matched.add(tag)
+                    # Map keyword to composite tags
+                    if keyword in keyword_to_tags:
+                        matched.update(keyword_to_tags[keyword])
+                    else:
+                        matched.add(keyword)  # Fallback: use keyword as-is
 
             ops.append({"op": "add", "path": f"/children/{sk}/children/{qk}/metadata/tags",
                         "value": ', '.join(sorted(matched))})
@@ -261,11 +286,20 @@ def _build_prompt(fix_items: list, create_items: list) -> str:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Process flagged items and re-tag questions")
+    parser.add_argument("--force", "-f", action="store_true",
+                        help="Force re-tag all questions, ignoring timestamp and tags_ok")
+    args = parser.parse_args()
+
     # Migration / re-tag step always runs — picks up every question that
     # has tags_ok != true (initial migration: no timestamp; or a later
     # post-edit case: question.timestamp > root.timestamp).
-    print("🏷️  Re-tagging stale questions via Aho-Corasick...", file=sys.stderr)
-    retagged = _retag_stale()
+    # With --force, ignores these checks and re-tags everything.
+    if args.force:
+        print("🏷️  Re-tagging ALL questions via Aho-Corasick (--force mode)...", file=sys.stderr)
+    else:
+        print("🏷️  Re-tagging stale questions via Aho-Corasick...", file=sys.stderr)
+    retagged = _retag_stale(force=args.force)
     print(f"   re-tagged: {retagged}", file=sys.stderr)
 
     # Claude subprocess runs only inside Docker (binary + plugin dir).
@@ -328,8 +362,11 @@ def main() -> int:
     stamped = _stamp_changed_questions(pre_snapshot)
     print(f"   stamped: {stamped}", file=sys.stderr)
 
-    print("🏷️  Re-tagging stale questions via Aho-Corasick (post-Claude)...", file=sys.stderr)
-    retagged = _retag_stale()
+    if args.force:
+        print("🏷️  Re-tagging ALL questions via Aho-Corasick (post-Claude, --force mode)...", file=sys.stderr)
+    else:
+        print("🏷️  Re-tagging stale questions via Aho-Corasick (post-Claude)...", file=sys.stderr)
+    retagged = _retag_stale(force=args.force)
     print(f"   re-tagged: {retagged}", file=sys.stderr)
 
     print(f"🗑️  Removing processed items...", file=sys.stderr)
