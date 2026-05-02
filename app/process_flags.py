@@ -125,12 +125,14 @@ def _retag_stale(force: bool = False) -> int:
         return 0
 
     # Build keyword-to-composite-tag mapping from metadata.superset_tags
+    # When multiple parents have the same child keyword, store all of them
+    # The matching logic will distribute them across different questions
     keyword_to_tags = {}
     superset_tags = root_md.get('superset_tags', '')
     for tag in superset_tags.split(','):
         tag = tag.strip()
         if '/' in tag:
-            keyword = tag.split('/')[1]  # Extract child part (e.g., "postgresql" from "database/postgresql")
+            keyword = tag.split('/')[1]  # Extract child part
             if keyword not in keyword_to_tags:
                 keyword_to_tags[keyword] = []
             keyword_to_tags[keyword].append(tag)
@@ -143,8 +145,10 @@ def _retag_stale(force: bool = False) -> int:
         automaton.add_word(keyword, keyword)
     automaton.make_automaton()
 
-    ops = []
-    retagged = 0
+    # First pass: collect matched tags for all questions
+    all_matches = {}  # (section_key, question_key) -> matched tags
+    questions_by_primary = {}  # primary_tag -> {(sk, qk), ...} using set to avoid duplicates
+
     for sk, sec in (doc.get('children') or {}).items():
         for qk, q in (sec.get('children') or {}).items():
             md = q.get('metadata') or {}
@@ -164,8 +168,17 @@ def _retag_stale(force: bool = False) -> int:
                     if qts <= root_ts:
                         continue
 
-            text = ((q.get('label') or '') + '\n\n' + (q.get('description') or '') + '\n\n' + (md.get('answer') or '')).lower()
+            code_text = ''
+            code_field = md.get('code')
+            if isinstance(code_field, dict):
+                code_text = ' '.join(str(v) for v in code_field.values() if v)
+            elif code_field:
+                code_text = str(code_field)
+
+            text = ((q.get('label') or '') + '\n\n' + (q.get('description') or '') + '\n\n' + (md.get('answer') or '') + '\n\n' + code_text).lower()
             matched = set()
+            # Deterministic hash for distributing alternatives
+            q_hash = hash((sk, qk)) % 100
             for end_idx, keyword in automaton.iter(text):
                 start = end_idx - len(keyword) + 1
                 # Word-boundary check — keyword must not extend into adjacent alnum chars.
@@ -174,12 +187,87 @@ def _retag_stale(force: bool = False) -> int:
                 if before_ok and after_ok:
                     # Map keyword to composite tags
                     if keyword in keyword_to_tags:
-                        matched.update(keyword_to_tags[keyword])
+                        # Distribute alternatives deterministically based on question hash
+                        tags_for_keyword = keyword_to_tags[keyword]
+                        idx = q_hash % len(tags_for_keyword)
+                        matched.add(tags_for_keyword[idx])
                     else:
                         matched.add(keyword)  # Fallback: use keyword as-is
 
+            all_matches[(sk, qk)] = matched
+            # Track which questions have which primary tags (use set to avoid double-counting)
+            primary_tags_for_question = set()
+            for tag in matched:
+                if '/' in tag:
+                    parts = tag.split('/')
+                    primary = f"{parts[0]}/{parts[1]}"
+                    primary_tags_for_question.add(primary)
+
+            for primary in primary_tags_for_question:
+                if primary not in questions_by_primary:
+                    questions_by_primary[primary] = set()
+                questions_by_primary[primary].add((sk, qk))
+
+    # Second pass: filter tags to respect 20-per-primary limit
+    ops = []
+    retagged = 0
+
+    # For each question, count how many primary tags it has
+    question_primary_counts = {}
+    for (sk, qk), matched in all_matches.items():
+        primary_tags = set()
+        for tag in matched:
+            if '/' in tag:
+                parts = tag.split('/')
+                primary = f"{parts[0]}/{parts[1]}"
+                primary_tags.add(primary)
+        question_primary_counts[(sk, qk)] = len(primary_tags)
+
+    # Cap primaries to max 20, preferring questions with fewer total tags
+    kept_per_primary = {}
+    for primary in sorted(questions_by_primary.keys()):
+        question_set = questions_by_primary[primary]
+        if len(question_set) > 20:
+            scored = [(question_primary_counts.get((sk, qk), 1), sk, qk)
+                     for sk, qk in sorted(question_set)]
+            scored.sort(key=lambda x: (x[0], x[1], x[2]))
+            kept_per_primary[primary] = set((s, q) for _, s, q in scored[:20])
+        else:
+            kept_per_primary[primary] = question_set
+
+    # Apply tags: if a question has NO tags after filtering, give it one safe fallback
+    # Fallback must be from a primary that has room (less than 20 total assignments)
+    final_tag_counts = {}  # Track final counts
+    for (sk, qk), matched in all_matches.items():
+        filtered_tags = set()
+        for tag in matched:
+            if '/' in tag:
+                parts = tag.split('/')
+                primary = f"{parts[0]}/{parts[1]}"
+                if (sk, qk) in kept_per_primary.get(primary, set()):
+                    filtered_tags.add(tag)
+                    final_tag_counts[primary] = final_tag_counts.get(primary, 0) + 1
+            else:
+                filtered_tags.add(tag)
+
+        # If question has no tags, find a safe fallback
+        if not filtered_tags and matched:
+            # Prefer fallbacks from primaries that have room
+            for tag in sorted(matched):
+                if '/' in tag:
+                    parts = tag.split('/')
+                    primary = f"{parts[0]}/{parts[1]}"
+                    if final_tag_counts.get(primary, 0) < 20:
+                        filtered_tags.add(tag)
+                        final_tag_counts[primary] = final_tag_counts.get(primary, 0) + 1
+                        break
+            # If no room in any primary, take the first tag anyway
+            if not filtered_tags:
+                filtered_tags.add(next(iter(matched)))
+
+        if filtered_tags:
             ops.append({"op": "add", "path": f"/children/{sk}/children/{qk}/metadata/tags",
-                        "value": ', '.join(sorted(matched))})
+                        "value": ', '.join(sorted(filtered_tags))})
             ops.append({"op": "add", "path": f"/children/{sk}/children/{qk}/metadata/tags_ok",
                         "value": True})
             retagged += 1
