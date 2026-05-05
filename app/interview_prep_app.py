@@ -79,6 +79,10 @@ if "selected_subtopic" not in st.session_state:
     st.session_state.selected_subtopic = None
 if "selected_item" not in st.session_state:
     st.session_state.selected_item = None
+if "sel_parent_pills" not in st.session_state:
+    st.session_state.sel_parent_pills = None
+if "sel_child_pills" not in st.session_state:
+    st.session_state.sel_child_pills = None
 
 _MERMAID_DIRECTIONS = ["TD", "LR", "BT", "RL"]
 
@@ -274,18 +278,15 @@ def get_tags(json_file_path, tag=None):
 
     Returns:
         List of tags at specified hierarchy level
-        - If tag=None: Returns unique parent tags (part before '-')
-        - If tag provided: Returns nested tags (part after '-' in tags starting with tag-)
+        - If tag=None: Returns unique parent tags (part before '/')
+        - If tag provided: Returns child tags (part after '/' in tags starting with tag/)
 
     Examples:
         get_tags('/path/to/superset.k.json')
-        # Returns: ['language', 'system', 'api', 'database', ...]
+        # Returns: ['algorithm', 'system', 'database', ...]
 
-        get_tags('/path/to/superset.k.json', 'language')
-        # Returns: ['python', 'javascript', 'go', 'cpp', 'rust']
-
-        get_tags('/path/to/superset.k.json', 'system')
-        # Returns: ['concept', 'case', 'framework']
+        get_tags('/path/to/superset.k.json', 'algorithm')
+        # Returns: ['array', 'complexity', 'graph', 'tree', ...]
     """
     try:
         with open(json_file_path, 'r') as f:
@@ -297,19 +298,27 @@ def get_tags(json_file_path, tag=None):
             for q_key, question in section.get('children', {}).items():
                 tags_str = question.get('metadata', {}).get('tags', '')
                 if tags_str:
-                    # Split by comma and strip whitespace
                     tags = [t.strip() for t in tags_str.split(',')]
                     all_tags.extend(tags)
 
-        # Return all root-level tags (standalone + parent from composites), sorted lexicographically
-        root_tags = set()
-        for full_tag in all_tags:
-            if '/' in full_tag:
-                parent = full_tag.split('/')[0]
-                root_tags.add(parent)
-            else:
-                root_tags.add(full_tag)
-        return sorted(list(root_tags), key=str.lower)
+        if tag is None:
+            # Return unique parent tags (part before '/')
+            parent_tags = set()
+            for full_tag in all_tags:
+                if '/' in full_tag:
+                    parent = full_tag.split('/')[0]
+                    parent_tags.add(parent)
+            return sorted(list(parent_tags))
+        else:
+            # Return nested tags for specified parent (part after '/')
+            nested_tags = set()
+            prefix = tag + '/'
+            for full_tag in all_tags:
+                if full_tag.startswith(prefix):
+                    nested = full_tag[len(prefix):]
+                    if nested:
+                        nested_tags.add(nested)
+            return sorted(list(nested_tags))
 
     except FileNotFoundError:
         return []
@@ -461,7 +470,40 @@ def smart_flags_handler(debounce: float = 10.0) -> None:
     _flags_timer.start()
 
 
+def _check_docker_and_claude() -> tuple[bool, str]:
+    """Check if running in Docker and if Claude executable is available.
+
+    Returns:
+        (is_available, error_message) - True if both Docker and Claude are available,
+        error message otherwise
+    """
+    import shutil
+
+    # Check if running in Docker/DevContainer
+    is_docker = (
+        os.path.exists('/.dockerenv')
+        or os.getenv('DOCKER_CONTAINER') == 'true'
+        or os.getenv('DEVCONTAINER') == 'true'
+        or 'HOSTNAME' in os.environ
+    )
+
+    if not is_docker:
+        return False, "⚠️ process_flags.py requires Docker/container environment"
+
+    # Check if Claude executable is available
+    if not shutil.which('claude'):
+        return False, "⚠️ Claude executable not found in PATH"
+
+    return True, ""
+
+
 def _run_process_flags() -> None:
+    is_available, error_msg = _check_docker_and_claude()
+
+    if not is_available:
+        st.error(error_msg)
+        return
+
     script = os.path.join(os.path.dirname(__file__), "process_flags.py")
     subprocess.Popen(
         [sys.executable, script],
@@ -558,13 +600,27 @@ def _on_search_change():
     _ensure_selection_valid()
 
 
-def _on_tag_change():
-    # Tag click clears the search box (last filter wins).
+def _on_parent_change():
+    # Parent tag selection clears search and child selection
     st.session_state["tag_search_raw"] = ""
-    tag = st.session_state.get("sel_tag_pills")
-    st.session_state["filtered-topics"] = _ids_from_tag(tag)
-    st.session_state["current_filter"] = _filter_label_for_tag(tag)
-    _ensure_selection_valid()
+    st.session_state["sel_child_pills"] = None
+
+
+def _on_child_change():
+    # Child tag click clears search and filters topics
+    st.session_state["tag_search_raw"] = ""
+    parent = st.session_state.get("sel_parent_pills")
+    child = st.session_state.get("sel_child_pills")
+    if parent and child:
+        full_tag = f"{parent}/{child}"
+        st.session_state["filtered-topics"] = _ids_from_tag(full_tag)
+        st.session_state["current_filter"] = full_tag
+        _ensure_selection_valid()
+    elif parent and not child:
+        # Deselected child tag - show all parent topics
+        st.session_state["filtered-topics"] = _ids_from_tag(parent)
+        st.session_state["current_filter"] = parent
+        _ensure_selection_valid()
 
 
 # --- One-time URL restore: seed widget keys + filter, before widgets render -
@@ -614,19 +670,35 @@ _init_from_url()
 # Tags Navigation Container Pane
 with st.sidebar.container(border=True):
     st.markdown('<div data-testid="tags-cloud-container"></div>', unsafe_allow_html=True)
-    st.markdown("**🏷️ Tags**")
+    st.markdown("**🏷️ Category**")
 
     if os.path.exists(superset_path):
-        tags = get_tags(superset_path)
-        if tags:
+        parent_tags = get_tags(superset_path)
+        if parent_tags:
             st.pills(
-                "Tags",
-                options=tags,
+                "Category",
+                options=parent_tags,
                 selection_mode="single",
-                key="sel_tag_pills",
+                key="sel_parent_pills",
                 label_visibility="collapsed",
-                on_change=_on_tag_change,
+                on_change=_on_parent_change,
             )
+            _parent = st.session_state.get("sel_parent_pills")
+            if _parent:
+                child_tags = get_tags(superset_path, _parent)
+                if child_tags:
+                    st.markdown(
+                        f"<div style='font-size:11px;color:#888;margin:4px 0 2px'>↳ {_parent}</div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.pills(
+                        "Subcategory",
+                        options=child_tags,
+                        selection_mode="single",
+                        key="sel_child_pills",
+                        label_visibility="collapsed",
+                        on_change=_on_child_change,
+                    )
     else:
         st.error(f"❌ Superset file not found: {superset_path}")
 
@@ -715,7 +787,7 @@ with st.sidebar.expander("ℹ️ About"):
 
     Curated by Claude Code Agent, organized by topic and tags for easy navigation.
 
-    Created with Clockwork-Pilot, using Streamlit.
+    Created with [Clockwork-Pilot](https://github.com/Clockwork-Pilot/autopilot-ws), using Streamlit.
     """)
 
 
@@ -738,4 +810,4 @@ if _selected_id:
 # ============================================================================
 
 st.markdown("---")
-st.caption("🚀 Created with Clockwork-Pilot")
+st.caption("🚀 Created with [Clockwork-Pilot](https://github.com/Clockwork-Pilot/autopilot-ws)")

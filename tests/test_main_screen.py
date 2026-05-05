@@ -184,25 +184,34 @@ class TestTagsRendering:
         assert len(updated_pills) > 0, "Pills widget should still exist after tag selection"
 
     def test_child_tag_reset_on_parent_change(self, app):
-        """Selecting different tags maintains session state correctly."""
+        """Selecting different parent tags resets child tag selection."""
         app.run()
 
         sidebar_pills = app.sidebar.pills
-        tag_pills = sidebar_pills[0]
+        # Find parent category pills (first pills widget in sidebar)
+        parent_pills = None
+        for pills in sidebar_pills:
+            if hasattr(pills, 'key') and pills.key == "sel_parent_pills":
+                parent_pills = pills
+                break
 
-        if len(tag_pills.options) < 2:
-            return  # Skip if not enough tags to test
+        if not parent_pills or len(parent_pills.options) < 2:
+            return  # Skip if not enough parent tags to test
 
-        first_tag = tag_pills.options[0]
-        second_tag = tag_pills.options[1]
+        first_tag = parent_pills.options[0]
+        second_tag = parent_pills.options[1]
 
-        # Select first tag
-        tag_pills.set_value(first_tag).run()
-        assert app.session_state["sel_tag_pills"] == first_tag
+        # Select first parent tag
+        parent_pills.set_value(first_tag).run()
+        assert app.session_state["sel_parent_pills"] == first_tag
+        # Child selection should be reset
+        assert app.session_state["sel_child_pills"] is None
 
-        # Select a different tag
-        tag_pills.set_value(second_tag).run()
-        assert app.session_state["sel_tag_pills"] == second_tag
+        # Select a different parent tag
+        parent_pills.set_value(second_tag).run()
+        assert app.session_state["sel_parent_pills"] == second_tag
+        # Child selection should still be reset
+        assert app.session_state["sel_child_pills"] is None
 
 
 class TestFlagItem:
