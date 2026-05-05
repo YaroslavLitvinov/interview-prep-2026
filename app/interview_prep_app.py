@@ -832,4 +832,8 @@ if _selected_id:
 # ============================================================================
 
 st.markdown("---")
-st.caption("🚀 Created with [Clockwork-Pilot](https://github.com/Clockwork-Pilot/autopilot-ws)")
+col1, col2 = st.columns(2)
+with col1:
+    st.caption("🚀 Created with [Clockwork-Pilot](https://github.com/Clockwork-Pilot/autopilot-ws)")
+with col2:
+    st.caption("📂 [View on GitHub](https://github.com/YaroslavLitvinov/interview-prep-2026)")

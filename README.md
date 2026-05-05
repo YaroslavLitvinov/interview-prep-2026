@@ -12,5 +12,5 @@ IMAGE_TAG=autopilot-ws-prep PROJECT_ROOT=~/git/clockwork-pilot/interview-prep-20
 
 # run streamlit app, exposing port
 ``` bash
-IMAGE_TAG=autopilot-ws-prep PROJECT_ROOT=~/git/clockwork-pilot/interview-prep-2026/ DOCKER_FILES=~/git/clockwork-pilot/interview-prep-2026/docker-files PROXY_WRAPPER_CONFIG= DOCKER_FLAGS="-p 8501:8501"  ~/git/clockwork-pilot/autopilot-ws/run-docker-workspace.sh "DEBUG=1 streamlit run /workspace/app/interview_prep_app.py"
+IMAGE_TAG=autopilot-ws-prep PROJECT_ROOT=~/git/clockwork-pilot/interview-prep-2026/ DOCKER_FILES=~/git/clockwork-pilot/interview-prep-2026/docker-files PROXY_WRAPPER_CONFIG= DOCKER_FLAGS="-p 8501:8501"  ~/git/clockwork-pilot/autopilot-ws/run-docker-workspace.sh "ADMIN=1 streamlit run /workspace/app/interview_prep_app.py"
 ```
