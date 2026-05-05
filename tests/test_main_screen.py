@@ -278,3 +278,70 @@ class TestFlagItem:
         assert path.exists()
         data = json.loads(path.read_text())
         assert "system_design_q1" in data["children"]
+
+
+class TestTagArrowDisplay:
+    """Test that hierarchical tags display with arrow (→) notation in both sidebar and main"""
+
+    REAL_TOPIC_ID = "system_design.q1"
+
+    def test_arrow_in_main_header_for_hierarchical_tag(self, app):
+        """Main header should show 'parent → child' format for hierarchical tags"""
+        app.session_state["sel_parent_pills"] = "framework"
+        app.session_state["sel_child_pills"] = "django"
+        app.session_state["current_filter"] = "framework/django"
+        app.session_state["filtered-topics"] = [self.REAL_TOPIC_ID]
+        app.session_state["selected-topic-id"] = self.REAL_TOPIC_ID
+        app.session_state["_url_restored"] = True
+        app.run()
+
+        # Check main header contains arrow notation
+        headers = app.header
+        assert any("framework → django" in str(h.value) for h in headers), (
+            f"Expected 'framework → django' in main header, found: {[str(h.value) for h in headers]}"
+        )
+
+    def test_arrow_in_sidebar_filter_for_hierarchical_tag(self, app):
+        """Sidebar filter display should show 'parent → child' format for hierarchical tags"""
+        app.session_state["sel_parent_pills"] = "behavior"
+        app.session_state["sel_child_pills"] = "communication"
+        app.session_state["current_filter"] = "behavior/communication"
+        app.session_state["filtered-topics"] = [self.REAL_TOPIC_ID]
+        app.session_state["selected-topic-id"] = self.REAL_TOPIC_ID
+        app.session_state["_url_restored"] = True
+        app.run()
+
+        # Check sidebar markdown contains arrow notation
+        markdowns = app.sidebar.markdown
+        assert any("behavior → communication" in str(m.value) for m in markdowns), (
+            f"Expected 'behavior → communication' in sidebar, found: {[str(m.value) for m in markdowns]}"
+        )
+
+    def test_no_arrow_for_non_hierarchical_tags(self, app):
+        """Non-hierarchical tags (without /) should display as-is"""
+        app.session_state["sel_parent_pills"] = "system-design"
+        app.session_state["current_filter"] = "system-design"
+        app.session_state["filtered-topics"] = [self.REAL_TOPIC_ID]
+        app.session_state["selected-topic-id"] = self.REAL_TOPIC_ID
+        app.session_state["_url_restored"] = True
+        app.run()
+
+        # Check main header shows tag without arrow
+        headers = app.header
+        assert any("system-design" in str(h.value) and "→" not in str(h.value) for h in headers), (
+            f"Expected 'system-design' without arrow in main header, found: {[str(h.value) for h in headers]}"
+        )
+
+    def test_all_topics_has_no_arrow(self, app):
+        """'All Topics' filter should never have arrow"""
+        app.session_state["current_filter"] = "All Topics"
+        app.session_state["filtered-topics"] = [self.REAL_TOPIC_ID]
+        app.session_state["selected-topic-id"] = self.REAL_TOPIC_ID
+        app.session_state["_url_restored"] = True
+        app.run()
+
+        # Check main header shows 'All Topics' without arrow
+        headers = app.header
+        assert any("All Topics" in str(h.value) and "→" not in str(h.value) for h in headers), (
+            f"Expected 'All Topics' without arrow in main header, found: {[str(h.value) for h in headers]}"
+        )

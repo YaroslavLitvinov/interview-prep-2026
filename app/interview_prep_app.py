@@ -69,22 +69,20 @@ st.markdown("""
 # Initialize session state
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
-if "selected_nav" not in st.session_state:
-    st.session_state.selected_nav = None
-if "selected_nav_path" not in st.session_state:
-    st.session_state.selected_nav_path = None
-if "selected_main_topic" not in st.session_state:
-    st.session_state.selected_main_topic = None
-if "selected_subtopic" not in st.session_state:
-    st.session_state.selected_subtopic = None
-if "selected_item" not in st.session_state:
-    st.session_state.selected_item = None
 if "sel_parent_pills" not in st.session_state:
     st.session_state.sel_parent_pills = None
 if "sel_child_pills" not in st.session_state:
     st.session_state.sel_child_pills = None
 
 _MERMAID_DIRECTIONS = ["TD", "LR", "BT", "RL"]
+
+
+def format_tag_display(tag: str) -> str:
+    """Format tag for display. Converts internal format (parent/child) to user-friendly format."""
+    if "/" in tag:
+        parts = tag.split("/")
+        return " → ".join(parts)
+    return tag
 
 
 def render_mermaid(code: str, topic_id: str) -> None:
@@ -160,7 +158,9 @@ def render_topic(topic_id: str) -> None:
     complete = prepare_topic_data(topic)
     filtered_ids: list[str] = st.session_state.get("filtered-topics", [])
 
-    st.header(f"📚 {st.session_state.get('current_filter', 'All Topics')}")
+    _filter = st.session_state.get('current_filter', 'All Topics')
+    _filter_display = format_tag_display(_filter) if _filter != 'All Topics' else _filter
+    st.header(f"📚 {_filter_display}")
 
     # Prev / Next driven by position inside filtered-topics.
     if topic_id in filtered_ids and len(filtered_ids) > 1:
@@ -180,7 +180,8 @@ def render_topic(topic_id: str) -> None:
     st.subheader(complete.label)
     st.caption(f"📂 {complete.section}")
     if complete.tags:
-        st.caption(f"🏷️ **Tags:** {complete.tags}")
+        formatted_tags = ", ".join(format_tag_display(t.strip()) for t in complete.tags.split(","))
+        st.caption(f"🏷️ **Tags:** {formatted_tags}")
     st.markdown(f"{complete.description}")
     st.markdown("---")
 
@@ -303,11 +304,14 @@ def get_tags(json_file_path, tag=None):
 
         if tag is None:
             # Return unique parent tags (part before '/')
+            # Also include non-hierarchical tags (no '/')
             parent_tags = set()
             for full_tag in all_tags:
                 if '/' in full_tag:
                     parent = full_tag.split('/')[0]
                     parent_tags.add(parent)
+                else:
+                    parent_tags.add(full_tag)
             return sorted(list(parent_tags))
         else:
             # Return nested tags for specified parent (part after '/')
@@ -600,27 +604,24 @@ def _on_search_change():
     _ensure_selection_valid()
 
 
+def _update_filter():
+    parent = st.session_state.get("sel_parent_pills")
+    child = st.session_state.get("sel_child_pills")
+    tag = "/".join(filter(None, [parent, child])) or None
+    st.session_state["filtered-topics"] = _ids_from_tag(tag)
+    st.session_state["current_filter"] = tag or "All Topics"
+    _ensure_selection_valid()
+
+
 def _on_parent_change():
-    # Parent tag selection clears search and child selection
     st.session_state["tag_search_raw"] = ""
     st.session_state["sel_child_pills"] = None
+    _update_filter()
 
 
 def _on_child_change():
-    # Child tag click clears search and filters topics
     st.session_state["tag_search_raw"] = ""
-    parent = st.session_state.get("sel_parent_pills")
-    child = st.session_state.get("sel_child_pills")
-    if parent and child:
-        full_tag = f"{parent}/{child}"
-        st.session_state["filtered-topics"] = _ids_from_tag(full_tag)
-        st.session_state["current_filter"] = full_tag
-        _ensure_selection_valid()
-    elif parent and not child:
-        # Deselected child tag - show all parent topics
-        st.session_state["filtered-topics"] = _ids_from_tag(parent)
-        st.session_state["current_filter"] = parent
-        _ensure_selection_valid()
+    _update_filter()
 
 
 # --- One-time URL restore: seed widget keys + filter, before widgets render -
@@ -720,7 +721,8 @@ with st.sidebar.container(border=True):
     if _cf.startswith("🔍 "):
         st.markdown(f"**{_cf}** `{len(_filtered)}` result(s)")
     else:
-        st.markdown(f"**📋 {_cf}** `{len(_filtered)}`")
+        _cf_display = format_tag_display(_cf) if _cf != "All Topics" else _cf
+        st.markdown(f"**📋 {_cf_display}** `{len(_filtered)}`")
 
     if _filtered:
         st.radio(
