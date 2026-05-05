@@ -7,9 +7,17 @@ import json
 import re
 import threading
 import time
+import logging
 from typing import Optional
 
 from pydantic import BaseModel, Field
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 class BasicTopic(BaseModel):
@@ -42,7 +50,14 @@ if os.path.isdir(_DEPS) and _DEPS not in sys.path:
 # Get PROJECT_ROOT from environment, fallback to current working directory
 PROJECT_ROOT = os.getenv('PROJECT_ROOT', os.getcwd())
 DEBUG = os.getenv('DEBUG', '').lower() == '1'
+ADMIN = os.getenv('ADMIN', '').lower() == '1'
 APP_TITLE = "Interview Prep 2026"
+
+# Log environment variables for debugging
+logger.info(f"PROJECT_ROOT: {PROJECT_ROOT}")
+logger.info(f"DEBUG: {DEBUG}")
+logger.info(f"ADMIN: {ADMIN}")
+logger.info(f"Current working directory: {os.getcwd()}")
 
 # Page configuration
 st.set_page_config(
@@ -199,7 +214,7 @@ def render_topic(topic_id: str) -> None:
     def _section_header(title: str, flag_key: str, meta_key: str):
         with st.container(key=f"section-header-{meta_key}"):
             st.markdown(title)
-            if st.button("🚩", key=flag_key, help=f"Flag {meta_key}"):
+            if ADMIN and st.button("🚩", key=flag_key, help=f"Flag {meta_key}"):
                 flag_item(section_id, question_id, meta_key)
 
     if metadata.get('mermaid'):
@@ -599,6 +614,9 @@ def _filter_label_for_tag(tag: Optional[str]) -> str:
 
 def _on_search_change():
     q = st.session_state.get("tag_search_raw", "").strip()
+    # Reset tag selection when searching
+    st.session_state["sel_parent_pills"] = None
+    st.session_state["sel_child_pills"] = None
     st.session_state["filtered-topics"] = _ids_from_search(q)
     st.session_state["current_filter"] = f"🔍 {q}" if q else "All Topics"
     _ensure_selection_valid()
@@ -633,34 +651,37 @@ def _init_from_url():
     st.session_state["_url_restored"] = True
 
     qp_search = st.query_params.get("s") or ""
-    qp_q = st.query_params.get("q") or ""
-    qp_tag = None
-    qp_topic_idx = 0
+    qp_parent = st.query_params.get("p") or ""
+    qp_child = st.query_params.get("c") or ""
+    qp_idx = st.query_params.get("q") or ""
 
-    if qp_q.lstrip("-").isdigit():
-        qp_topic_idx = max(0, int(qp_q) - 1)
-    elif qp_q:
-        parts = qp_q.split(".", 1)
-        qp_tag = parts[0] if parts[0] else None
-        if len(parts) >= 2 and parts[1].lstrip("-").isdigit():
-            qp_topic_idx = max(0, int(parts[1]) - 1)
-
+    # Restore all state from URL params
     if qp_search:
         st.session_state["tag_search_raw"] = qp_search
-    if qp_tag:
-        st.session_state["sel_tag_pills"] = qp_tag
+    if qp_parent:
+        st.session_state["sel_parent_pills"] = qp_parent
+    if qp_child:
+        st.session_state["sel_child_pills"] = qp_child
 
+    # Compute filtered topics based on restored state
+    tag = "/".join(filter(None, [qp_parent, qp_child])) or None
     if qp_search:
         filtered = _ids_from_search(qp_search)
         st.session_state["current_filter"] = f"🔍 {qp_search}"
-    elif qp_tag:
-        filtered = _ids_from_tag(qp_tag)
-        st.session_state["current_filter"] = _filter_label_for_tag(qp_tag)
+    elif tag:
+        filtered = _ids_from_tag(tag)
+        st.session_state["current_filter"] = _filter_label_for_tag(tag)
     else:
         filtered = [t.topic_id for t in get_topics(superset_path)]
         st.session_state["current_filter"] = "All Topics"
 
     st.session_state["filtered-topics"] = filtered
+
+    # Restore topic selection index
+    qp_topic_idx = 0
+    if qp_idx.lstrip("-").isdigit():
+        qp_topic_idx = max(0, int(qp_idx) - 1)
+
     if filtered:
         st.session_state["selected-topic-id"] = filtered[min(qp_topic_idx, len(filtered) - 1)]
 
@@ -736,46 +757,45 @@ with st.sidebar.container(border=True):
         st.caption(f"No results for `{_search}`")
 
 
-# Sync full navigation state to URL.
-# ?s=term when search active; ?q=tag.N / ?q=N otherwise.
-def _build_nav_q() -> Optional[str]:
-    tag = st.session_state.get("sel_tag_pills")
-    selected = st.session_state.get("selected-topic-id")
-    filtered: list[str] = st.session_state.get("filtered-topics", [])
-    idx = filtered.index(selected) if selected in filtered else 0
-
-    if not tag:
-        return str(idx + 1) if idx else None
-    if idx:
-        return f"{tag}.{idx + 1}"
-    return tag
-
-
-_nav_q = _build_nav_q()
 st.query_params.clear()
+
+# Save all state to URL unconditionally
 if _search:
     st.query_params["s"] = _search
-elif _nav_q:
-    st.query_params["q"] = _nav_q
 
-st.sidebar.markdown("---")
+_parent = st.session_state.get("sel_parent_pills")
+_child = st.session_state.get("sel_child_pills")
+if _parent:
+    st.query_params["p"] = _parent
+if _child:
+    st.query_params["c"] = _child
 
-with st.sidebar.expander("✏️ Submit a Question"):
-    _submit_count = st.session_state.get("_submit_count", 0)
-    _q_text = st.text_area(
-        "Question",
-        height=120,
-        key=f"new_question_input_{_submit_count}",
-        label_visibility="collapsed",
-        placeholder="Enter a question to add to the knowledge base...",
-    )
-    if st.button("Submit", key="submit_question_btn"):
-        if _q_text.strip():
-            submit_new_question(_q_text.strip())
-            st.session_state["_submit_count"] = _submit_count + 1
-            st.rerun()
-        else:
-            st.toast("⚠️ Please enter a question first")
+# Save topic selection index
+_selected = st.session_state.get("selected-topic-id")
+_filtered = st.session_state.get("filtered-topics", [])
+if _selected in _filtered:
+    _idx = _filtered.index(_selected) + 1
+    if _idx > 1:  # Only add index if not first item
+        st.query_params["q"] = str(_idx)
+
+if ADMIN:
+    st.sidebar.markdown("---")
+    with st.sidebar.expander("✏️ Submit a Question"):
+        _submit_count = st.session_state.get("_submit_count", 0)
+        _q_text = st.text_area(
+            "Question",
+            height=120,
+            key=f"new_question_input_{_submit_count}",
+            label_visibility="collapsed",
+            placeholder="Enter a question to add to the knowledge base...",
+        )
+        if st.button("Submit", key="submit_question_btn"):
+            if _q_text.strip():
+                submit_new_question(_q_text.strip())
+                st.session_state["_submit_count"] = _submit_count + 1
+                st.rerun()
+            else:
+                st.toast("⚠️ Please enter a question first")
 
 with st.sidebar.expander("ℹ️ About"):
     st.write(f"""

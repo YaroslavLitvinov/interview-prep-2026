@@ -66,8 +66,18 @@ class TestFooter:
 
     def test_footer_renders(self, app):
         app.run()
-        # Sidebar expanders (Submit + About) serve as the page footer
-        assert len(app.sidebar.expander) >= 2
+        # About expander is always present
+        expanders = app.sidebar.expander
+        about_expanders = [e for e in expanders if "About" in str(e.label) or "ℹ️" in str(e.label)]
+        assert len(about_expanders) > 0, "About expander should be present"
+
+    def test_footer_with_admin(self, app, monkeypatch):
+        """With ADMIN=1, both Submit and About expanders should be present"""
+        monkeypatch.setenv("ADMIN", "1")
+        app.run()
+        # Both Submit and About expanders should be present
+        expanders = app.sidebar.expander
+        assert len(expanders) >= 2, f"Expected at least 2 expanders with ADMIN, got {len(expanders)}"
 
 
 class TestElementIdentifiers:
@@ -278,6 +288,58 @@ class TestFlagItem:
         assert path.exists()
         data = json.loads(path.read_text())
         assert "system_design_q1" in data["children"]
+
+
+class TestAdminFeatures:
+    """Test that flagging and submit features are controlled by ADMIN env var"""
+
+    REAL_TOPIC_ID = "system_design.q1"
+
+    def test_flag_button_hidden_without_admin(self, app, monkeypatch):
+        """Flag button (🚩) should not be visible when ADMIN is not set"""
+        monkeypatch.delenv("ADMIN", raising=False)
+        app.session_state["filtered-topics"] = [self.REAL_TOPIC_ID]
+        app.session_state["selected-topic-id"] = self.REAL_TOPIC_ID
+        app.session_state["_url_restored"] = True
+        app.run()
+
+        # Check that no flag button is rendered
+        buttons = app.button
+        flag_buttons = [b for b in buttons if b.label == "🚩"]
+        assert len(flag_buttons) == 0, f"Expected no flag buttons when ADMIN not set, found {len(flag_buttons)}"
+
+    def test_flag_button_visible_with_admin(self, app, monkeypatch):
+        """Flag button (🚩) should be visible when ADMIN=1"""
+        monkeypatch.setenv("ADMIN", "1")
+        app.session_state["filtered-topics"] = [self.REAL_TOPIC_ID]
+        app.session_state["selected-topic-id"] = self.REAL_TOPIC_ID
+        app.session_state["_url_restored"] = True
+        app.run()
+
+        # Check that flag buttons are rendered
+        buttons = app.button
+        flag_buttons = [b for b in buttons if b.label == "🚩"]
+        assert len(flag_buttons) > 0, "Expected flag buttons when ADMIN=1"
+
+    def test_submit_question_hidden_without_admin(self, app, monkeypatch):
+        """Submit Question expander should not be visible when ADMIN is not set"""
+        monkeypatch.delenv("ADMIN", raising=False)
+        app.run()
+
+        # Check that Submit expander is not present in sidebar
+        expanders = app.sidebar.expander
+        submit_expanders = [e for e in expanders if "Submit" in str(e.label)]
+        assert len(submit_expanders) == 0, f"Expected no Submit expander when ADMIN not set, found {len(submit_expanders)}"
+
+    def test_submit_question_visible_with_admin(self, app, monkeypatch):
+        """Submit Question expander should be visible when ADMIN=1"""
+        monkeypatch.setenv("ADMIN", "1")
+        app.run()
+
+        # Check that Submit expander is present in sidebar
+        expanders = app.sidebar.expander
+        submit_expanders = [e for e in expanders if "Submit" in str(e.label) or "✏️" in str(e.label)]
+        assert len(submit_expanders) > 0, "Expected Submit expander when ADMIN=1"
 
 
 class TestTagArrowDisplay:
