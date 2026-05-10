@@ -1,0 +1,124 @@
+{
+  "type": "Doc",
+  "model_version": 1,
+  "id": "superset_edge_cases",
+  "label": "Edge Case Test Database",
+  "description": "Test data with edge cases: single-question sections, missing mermaid, many tags, special characters.",
+  "metadata": {
+    "timestamp": "2026-05-06T21:11:40+00:00",
+    "superset_tags": "test-single, test-many-tags, tag1, tag2, tag3, tag4, tag5, tag6, tag7, tag8",
+    "about_tags": "Hierarchical tags using parent/child format (parent/child)"
+  },
+  "opts": {
+    "render_priority": "children",
+    "render_toc": true
+  },
+  "children": {
+    "single_question_section": {
+      "label": "Section with Single Question",
+      "description": "Edge case: section has exactly one question (minimum allowed).",
+      "metadata": {
+        "tags": "test-single"
+      },
+      "children": {
+        "q1": {
+          "id": "q1",
+          "label": "Only Question in Section",
+          "description": "This is the only question in this section. Tests edge case of single-question sections.",
+          "metadata": {
+            "tags": "test-single",
+            "context_tags": "case-study",
+            "mermaid": "",
+            "answer": "## Edge Case: Single Question\n\nSections don't always have multiple questions. Some sections are focused on a single topic.",
+            "code": "# Single question edge case\npass",
+            "tags_ok": true,
+            "timestamp": "2026-05-06T21:11:40+00:00"
+          }
+        }
+      }
+    },
+    "many_tags_section": {
+      "label": "Section with Many Tags",
+      "description": "Edge case: questions tagged with many tags to test tag cardinality limits.",
+      "metadata": {
+        "tags": "test-many-tags, tag1, tag2"
+      },
+      "children": {
+        "q1": {
+          "id": "q1",
+          "label": "Question with 8 Tags",
+          "description": "This question has 8 tags. Tests tag cardinality and display in UI.",
+          "metadata": {
+            "tags": "test-many-tags, tag1, tag2, tag3, tag4, tag5, tag6, tag7",
+            "context_tags": "behavioral-story",
+            "mermaid": "graph TD\n    A[Many Tags] --> B[Tag1]\n    A --> C[Tag2]\n    A --> D[Tag3]",
+            "answer": "## Many Tags Edge Case\n\nQuestions can be tagged with multiple tags to aid discoverability. This tests the UI's ability to render many tags without breaking layout.",
+            "code": "def many_tags_example():\n    # This question has many tags\n    tags = ['test-many-tags', 'tag1', 'tag2', 'tag3', 'tag4', 'tag5', 'tag6', 'tag7']\n    return len(tags) == 8",
+            "tags_ok": true,
+            "timestamp": "2026-05-06T21:11:40+00:00"
+          }
+        },
+        "q2": {
+          "id": "q2",
+          "label": "Question with Special Characters in Description",
+          "description": "Description with special chars: !@#$%^&*()[]{}|\\;:'\",.<>?/`~\n\nTests that special characters don't break parsing or rendering.",
+          "metadata": {
+            "tags": "test-many-tags",
+            "context_tags": "code-example",
+            "mermaid": "graph TD\n    A[Special Chars] --> B[!@#]\n    A --> C[$%^]\n    A --> D[&*()]",
+            "answer": "## Special Characters Edge Case\n\nAnswers may contain special characters: !@#$%^&*()\n\nCode snippets can include regex patterns: `[a-zA-Z0-9_-]`\n\nJSON escaping: {\"key\": \"value\"}\n\nMermaid diagrams: graph TD[A] --> [B]",
+            "code": "import re\n\n# Regex with special chars\npattern = r'[!@#$%^&*()\\[\\]{}|;:\\'\",./<>?`~]'\ntext = 'Special: !@#$%^&*()'\nmatch = re.search(pattern, text)\nassert match is not None",
+            "tags_ok": true,
+            "timestamp": "2026-05-06T21:11:40+00:00"
+          }
+        }
+      }
+    },
+    "no_mermaid_section": {
+      "label": "Section Without Mermaid Diagrams",
+      "description": "Edge case: questions with empty or missing mermaid metadata.",
+      "metadata": {
+        "tags": "test-single"
+      },
+      "children": {
+        "q1": {
+          "id": "q1",
+          "label": "Question Without Diagram",
+          "description": "This question has no mermaid diagram. Tests UI graceful degradation.",
+          "metadata": {
+            "tags": "test-single",
+            "context_tags": "interview-technical",
+            "mermaid": "",
+            "answer": "## No Diagram Question\n\nSome questions don't need diagrams. The UI should handle this gracefully without showing an empty diagram box.",
+            "code": "# No mermaid edge case\ndef answer_without_diagram():\n    return True",
+            "tags_ok": true,
+            "timestamp": "2026-05-06T21:11:40+00:00"
+          }
+        }
+      }
+    },
+    "hierarchical_tags_section": {
+      "label": "Section with Hierarchical Tags",
+      "description": "Edge case: questions using parent/child tag hierarchy.",
+      "metadata": {
+        "tags": "algorithm/array"
+      },
+      "children": {
+        "q1": {
+          "id": "q1",
+          "label": "Hierarchical Tag Question",
+          "description": "Question tagged with hierarchical parent/child tags.",
+          "metadata": {
+            "tags": "algorithm/array, algorithm/search, behavior/communication",
+            "context_tags": "system-design",
+            "mermaid": "graph TD\n    A[Hierarchy] --> B[Parent]\n    B --> C[Child1]\n    B --> D[Child2]",
+            "answer": "## Hierarchical Tags\n\nTags can use parent/child hierarchy:\n- algorithm/array\n- algorithm/search\n- behavior/communication\n\nUI should display as: algorithm → array",
+            "code": "# Hierarchical tag test\ntag = 'algorithm/array'\nparent, child = tag.split('/')\nassert parent == 'algorithm'\nassert child == 'array'",
+            "tags_ok": true,
+            "timestamp": "2026-05-06T21:11:40+00:00"
+          }
+        }
+      }
+    }
+  }
+}

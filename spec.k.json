@@ -182,6 +182,45 @@
           "fails_count": 1
         }
       }
+    },
+    "knowledge_structure_validation": {
+      "type": "Feature",
+      "model_version": 1,
+      "id": "knowledge_structure_validation",
+      "description": "Validate state_machine knowledge structure: all entities must have proper references and bidirectional stakeholder linkages. No broken references allowed.",
+      "goals": [
+        "All entities in state_machine/knowledge/ are discoverable and properly referenced",
+        "No duplicate entity IDs across all knowledge documents",
+        "All references point to existing entities (no broken links)",
+        "Explicit references in related_decisions, related_docs, and tags are validated"
+      ],
+      "constraints": {
+        "constraint_knowledge_structure_consistency": {
+          "id": "constraint_knowledge_structure_consistency",
+          "cmd": "cd $PROJECT_ROOT && python3 state_machine/structure.py > /dev/null 2>&1",
+          "description": "Structural: state_machine knowledge structure must pass consistency validation (no broken references, duplicate IDs, or invalid JSON)",
+          "fails_count": 1
+        }
+      }
+    },
+    "forbidden_markdown_in_root": {
+      "type": "Feature",
+      "model_version": 1,
+      "id": "forbidden_markdown_in_root",
+      "description": "Project root must not contain .md files except README.md, *.k.md, and SKILL.md",
+      "goals": [
+        "Prevent markdown files in project root except permitted ones",
+        "Ensure all knowledge is stored in .k.json format",
+        "Maintain single source of truth principle"
+      ],
+      "constraints": {
+        "constraint_no_forbidden_markdown": {
+          "id": "constraint_no_forbidden_markdown",
+          "cmd": "find $PROJECT_ROOT -maxdepth 1 -type f -name '*.md' ! -name 'README.md' ! -name '*.k.md' ! -name 'SKILL.md' | grep -q . && { echo 'Forbidden markdown files found in root'; exit 1; } || exit 0",
+          "description": "Structural: No .md files allowed in project root except README.md, *.k.md (knowledge docs), and SKILL.md",
+          "fails_count": 1
+        }
+      }
     }
   }
 }

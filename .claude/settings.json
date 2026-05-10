@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit *)",
+            "command": "cd $PROJECT_ROOT && forbidden=$(find . -maxdepth 1 -name '*.md' -not -name 'README.md' -not -name '*.k.md' -type f | head -1) && if [ -n \"$forbidden\" ]; then echo '{\"continue\": false, \"stopReason\": \"Forbidden markdown file in project root: '$forbidden'. Only README.md and *.k.md files are allowed. Use knowledge-workflow for documentation.\"}'; exit 0; fi",
+            "statusMessage": "Checking markdown policy..."
+          }
+        ]
+      }
+    ]
+  }
+}

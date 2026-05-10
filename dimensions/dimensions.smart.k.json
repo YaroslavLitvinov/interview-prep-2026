@@ -1,0 +1,378 @@
+{
+  "type": "SmartDocument",
+  "model_version": 1,
+  "id": "dimensions_framework",
+  "label": "Dimensions Framework",
+  "description": "A framework for observing software systems across multiple dimensions of behavior, comparing observations across time, and producing reviewable evidence of change.",
+  "metadata": {},
+  "opts": {
+    "diagram_depth": 2
+  },
+  "shape": "rect",
+  "links": [],
+  "children": {
+    "application": {
+      "type": "SmartDocument",
+      "model_version": 1,
+      "id": "application",
+      "label": "The Application",
+      "description": "The system under observation \u2014 whatever software the framework is configured to watch. The framework treats it as opaque and reads only the artifacts the application exposes.",
+      "metadata": {},
+      "opts": {},
+      "shape": "circle",
+      "links": [],
+      "children": {}
+    },
+    "dimensions": {
+      "type": "SmartDocument",
+      "model_version": 1,
+      "id": "dimensions",
+      "label": "Dimensions",
+      "description": "The catalog of observation lenses. The framework recognizes five canonical dimension categories; the catalog is extensible.",
+      "metadata": {},
+      "opts": {},
+      "shape": "rect",
+      "links": [],
+      "children": {
+        "data_dimension": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "data_dimension",
+          "label": "Data Dimension",
+          "description": "Files, schemas, content integrity, distributions. Subject kind: file.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "visual_dimension": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "visual_dimension",
+          "label": "Visual Dimension",
+          "description": "UI rendering, layout, accessibility, computed styles. Subject kind: url.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "web_dimension": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "web_dimension",
+          "label": "Web Dimension",
+          "description": "HTTP / RPC API surfaces, request and response shapes. Subject kind: endpoint.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "cli_dimension": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "cli_dimension",
+          "label": "CLI Dimension",
+          "description": "Command-line tool behavior, exit codes, output structure. Subject kind: command.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "performance_dimension": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "performance_dimension",
+          "label": "Performance Dimension",
+          "description": "Latency, throughput, memory, allocations, span trees. Subject kind: workload.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        }
+      }
+    },
+    "plugins": {
+      "type": "SmartDocument",
+      "model_version": 1,
+      "id": "plugins",
+      "label": "Plugins",
+      "description": "The collectors. Each plugin is a small adapter that reads the application through one dimension and emits typed observations into the framework.",
+      "metadata": {},
+      "opts": {},
+      "shape": "subroutine",
+      "links": [
+        {
+          "target": "application",
+          "label": "observe",
+          "style": "arrow"
+        },
+        {
+          "target": "dimensions",
+          "label": "emit data for",
+          "style": "arrow"
+        }
+      ],
+      "children": {
+        "subject_identification": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "subject_identification",
+          "label": "Subject Identification",
+          "description": "How a plugin identifies what it observed. The plugin returns a subject dict (kind, path / url / endpoint / command / workload, plus per-category fields) that becomes part of the envelope and pins the snapshot to a specific source.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "observation_emission": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "observation_emission",
+          "label": "Observation Emission",
+          "description": "How a plugin emits typed observations. The framework provides six observation builders \u2014 scalar, boolean, rule_check, set, distribution, histogram \u2014 and the plugin calls them on the envelope. The framework validates each emission against the JSON Schema; malformed observations reject the whole envelope.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "envelope_lifecycle": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "envelope_lifecycle",
+          "label": "Envelope Lifecycle",
+          "description": "The plugin enters the envelope as a context manager via ctx.envelope(...); observations and attachments are accumulated; on context exit the framework validates and persists the envelope. Plugins never open files for output, never serialize JSON, and never touch the storage backend.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "artifact_attachment": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "artifact_attachment",
+          "label": "Artifact Attachment",
+          "description": "Plugins may attach raw artifacts (binary files, in-memory blobs) to an envelope via env.attach_file or env.attach. Decoders registered with the framework convert the attached form into JSON so the structural diff can compare it.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "framework_primitives": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "framework_primitives",
+          "label": "Framework Primitives",
+          "description": "The toolkit plugins consume to do their work. CollectionContext methods (ctx.envelope, ctx.read_json, ctx.read_file, ctx.run, ctx.fetch_http, ctx.walk_files), envelope observation builders (env.scalar, env.boolean, env.rule_check, env.set, env.distribution, env.histogram), and env.attach_file / env.attach. A primitive enters this toolkit only when at least two plugins re-implement the same logic \u2014 speculative additions are rejected.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        }
+      }
+    },
+    "envelope": {
+      "type": "SmartDocument",
+      "model_version": 1,
+      "id": "envelope",
+      "label": "Envelope",
+      "description": "The framework-owned wrappers around captured, contracted, and rendered data. All envelope types are .json files validated against JSON Schemas that are auto-generated from Pydantic models. Three distinct envelope types serve different purposes in the workflow: snapshots (collected data), specs (plugin contracts), and reports (rendered comparisons).",
+      "metadata": {},
+      "opts": {},
+      "shape": "rect",
+      "links": [],
+      "children": {
+        "snapshot_envelope": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "snapshot_envelope",
+          "label": "Snapshot Envelope",
+          "description": "Captured observations from one plugin run. Persisted as .snap.json under the storage backend, validated against the Pydantic-generated JSON Schema. Operational, regenerable, gitignored.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "spec_envelope": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "spec_envelope",
+          "label": "Spec Envelope",
+          "description": "Plugin contract specification declaring what a plugin commits to observe \u2014 subject kind, observation ids, severity policy. Persisted as .spec.json, validated against the Pydantic-generated JSON Schema. Authored alongside plugin code; reviewed in PR with the plugin.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "report_envelope": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "report_envelope",
+          "label": "Report Envelope",
+          "description": "Rendered diff between two snapshots, frozen as a decision artifact. Persisted as .report.json, validated against the Pydantic-generated JSON Schema. Generated by the framework; committed for review or archive.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "observation_kinds": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "observation_kinds",
+          "label": "Observation Kinds",
+          "description": "The six-kind taxonomy that every observation reduces to. Plugins emit observations strictly through these kinds; the framework's diff and render dispatch on the kind. The taxonomy is closed by design \u2014 adding a kind is a framework-level change, not a plugin-level one.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {
+            "scalar": {
+              "type": "SmartDocument",
+              "model_version": 1,
+              "id": "scalar",
+              "label": "Scalar",
+              "description": "A single named numeric or string measurement \u2014 count, latency, size, version, hash. Shape: { value, unit? }. Diff: before / after / delta when numeric.",
+              "metadata": {},
+              "opts": {},
+              "shape": "rect",
+              "links": [],
+              "children": {}
+            },
+            "boolean": {
+              "type": "SmartDocument",
+              "model_version": 1,
+              "id": "boolean",
+              "label": "Boolean",
+              "description": "A binary property \u2014 passed / failed, present / missing, enabled / disabled. Shape: { value }. Diff: state transition (true \u2192 false or false \u2192 true).",
+              "metadata": {},
+              "opts": {},
+              "shape": "rect",
+              "links": [],
+              "children": {}
+            },
+            "rule_check": {
+              "type": "SmartDocument",
+              "model_version": 1,
+              "id": "rule_check",
+              "label": "Rule Check",
+              "description": "A schema, pattern, or invariant rule applied to N items. Shape: { passed, violations_count, violations_sample, checked_count? }. Diff: passed-state transitions, new violations, resolved violations, scope changes (checked_count delta). The primary kind for catching regressions.",
+              "metadata": {},
+              "opts": {},
+              "shape": "rect",
+              "links": [],
+              "children": {}
+            },
+            "set": {
+              "type": "SmartDocument",
+              "model_version": 1,
+              "id": "set",
+              "label": "Set",
+              "description": "An unordered, deduplicated collection \u2014 inventory of headings, top-level keys, supported file extensions, available components. Shape: { items: [...] }. Diff: added / removed items.",
+              "metadata": {},
+              "opts": {},
+              "shape": "rect",
+              "links": [],
+              "children": {}
+            },
+            "distribution": {
+              "type": "SmartDocument",
+              "model_version": 1,
+              "id": "distribution",
+              "label": "Distribution",
+              "description": "A keyed count map \u2014 tag counts, value-type distribution, status code frequency, error category breakdown. Shape: { buckets: { key: count } }. Diff: added / removed buckets, per-bucket count delta.",
+              "metadata": {},
+              "opts": {},
+              "shape": "rect",
+              "links": [],
+              "children": {}
+            },
+            "histogram": {
+              "type": "SmartDocument",
+              "model_version": 1,
+              "id": "histogram",
+              "label": "Histogram",
+              "description": "A frequency table with top-N preserved plus totals. Shape: { top_n: [...], total, unique }. Diff: total / unique deltas, top-N membership changes. Suited to high-cardinality data where the full distribution is too large but the head is informative.",
+              "metadata": {},
+              "opts": {},
+              "shape": "rect",
+              "links": [],
+              "children": {}
+            }
+          }
+        }
+      }
+    },
+    "rendering": {
+      "type": "SmartDocument",
+      "model_version": 1,
+      "id": "rendering",
+      "label": "Rendering",
+      "description": "How the framework converts envelopes into reviewable output. Current renderers: text and markdown. Planned: Allure. Each renderer is a pure adapter \u2014 reads an envelope, writes the target format. Plugins have no knowledge of rendering.",
+      "metadata": {},
+      "opts": {},
+      "shape": "rect",
+      "links": [
+        {
+          "target": "snapshot_envelope",
+          "label": "reads",
+          "style": "arrow"
+        },
+        {
+          "target": "report_envelope",
+          "label": "produces",
+          "style": "arrow"
+        }
+      ],
+      "children": {
+        "text_renderer": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "text_renderer",
+          "label": "Text Renderer",
+          "description": "Plain-text rendering of envelopes and diffs. Used by the CLI for terminal output. The default renderer \u2014 no extra dependencies, present everywhere the framework runs.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "markdown_renderer": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "markdown_renderer",
+          "label": "Markdown Renderer",
+          "description": "Markdown rendering of envelopes and diffs. Used for review surfaces that consume markdown \u2014 pull request review, knowledge documents, web previews. Section headings, comparison tables, and inline observation deltas.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "allure_renderer": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "allure_renderer",
+          "label": "Allure Renderer (planned)",
+          "description": "Planned. Translates envelopes and diffs into Allure-compatible JSON files. Allure is the most tunable existing review UI: severity filtering, labels for grouping, custom defect categories, attachments, parameters, and run-over-run history that visualizes the convergence trail. Open source (Apache 2.0), file-based, local-first via `allure serve <results-dir>`. The renderer is a pure adapter \u2014 reads an envelope, writes Allure JSON; no business logic.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        }
+      }
+    }
+  }
+}

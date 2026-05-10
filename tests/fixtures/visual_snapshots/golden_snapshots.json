@@ -1,0 +1,96 @@
+{
+  "content_collapsed": {
+    "animation_duration": "200ms",
+    "background": "transparent",
+    "border": "none",
+    "content_visible": false,
+    "max_height": "0px",
+    "opacity": "0",
+    "padding": "0px"
+  },
+  "content_expanded": {
+    "animation_duration": "200ms",
+    "background": "#ffffff",
+    "border": "1px solid #e0e0e0",
+    "content_visible": true,
+    "max_height": "1000px",
+    "opacity": "1",
+    "padding": "16px"
+  },
+  "dark_mode_contrast": {
+    "accent_on_surface": "6.8:1",
+    "border_contrast": "3.5:1",
+    "text_on_background": "16.3:1",
+    "text_on_surface": "12.5:1"
+  },
+  "dark_mode_palette": {
+    "accent": "#2196F3",
+    "background": "#1e1e1e",
+    "border": "#404040",
+    "error": "#f44336",
+    "success": "#4caf50",
+    "surface": "#2d2d2d",
+    "text_primary": "#ffffff",
+    "text_secondary": "#b0b0b0"
+  },
+  "desktop_layout_1920": {
+    "content_width": "calc(100% - 300px)",
+    "max_content_width": "1200px",
+    "sidebar_visible": true,
+    "sidebar_width": "300px",
+    "two_column_capable": true,
+    "viewport_width": "1920px"
+  },
+  "main_screen_layout": {
+    "color_scheme": "light",
+    "content_width": "80%",
+    "font_family": "sans-serif",
+    "footer_height": "40px",
+    "header_height": "60px",
+    "max_width": "1200px",
+    "sidebar_width": "20%"
+  },
+  "mobile_layout_320": {
+    "content_full_width": true,
+    "font_size_adjustment": "0.9em",
+    "nav_collapsed": true,
+    "padding_adjustment": "0.8em",
+    "sidebar_visible": false,
+    "viewport_width": "320px"
+  },
+  "persist_test": {
+    "value": "test123"
+  },
+  "regression_test": {
+    "direction": "row",
+    "gap": "8px",
+    "layout": "flex"
+  },
+  "search_input_states": {
+    "background": "#ffffff",
+    "default_border": "1px solid #ddd",
+    "focus_border": "2px solid #2196F3",
+    "focus_box_shadow": "0 0 4px rgba(33, 150, 243, 0.3)",
+    "padding": "10px 12px",
+    "placeholder_color": "#999999",
+    "text_color": "#333333"
+  },
+  "tablet_layout_768": {
+    "content_width": "calc(100% - 250px)",
+    "font_size_adjustment": "1.0em",
+    "sidebar_visible": true,
+    "sidebar_width": "250px",
+    "two_column": false,
+    "viewport_width": "768px"
+  },
+  "tag_pills_styling": {
+    "hover_background": "#e8f4f8",
+    "pill_background": "#f0f0f0",
+    "pill_border_radius": "20px",
+    "pill_font_size": "14px",
+    "pill_padding": "8px 12px",
+    "pill_text_color": "#333333",
+    "selected_background": "#2196F3",
+    "selected_text_color": "#ffffff"
+  }
+}

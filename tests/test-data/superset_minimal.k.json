@@ -1,0 +1,69 @@
+{
+  "type": "Doc",
+  "model_version": 1,
+  "id": "superset_minimal",
+  "label": "Minimal Interview Prep Database",
+  "description": "Minimal test database with 1 section and 3 questions for fast unit tests.",
+  "metadata": {
+    "timestamp": "2026-05-06T21:11:40+00:00",
+    "superset_tags": "algorithm, array, string, sort, search, system-design, interview-prep, code-example",
+    "about_tags": "Hierarchical tags using parent/child format (parent/child)"
+  },
+  "opts": {
+    "render_priority": "children",
+    "render_toc": true
+  },
+  "children": {
+    "algorithm": {
+      "label": "Algorithm",
+      "description": "Core algorithmic problem-solving techniques.",
+      "metadata": {
+        "tags": "algorithm"
+      },
+      "children": {
+        "q1": {
+          "id": "q1",
+          "label": "Array Basics",
+          "description": "Fundamental operations on arrays: access, insert, delete, search.",
+          "metadata": {
+            "tags": "algorithm, array",
+            "context_tags": "system-design",
+            "mermaid": "graph TD\n    A[Array] --> B[Index Access]\n    A --> C[Insert]\n    A --> D[Delete]\n    B --> E[O1 time]",
+            "answer": "## Overview\n\nArrays are fundamental data structures that store elements in contiguous memory.\n\n### Time Complexity\n- Access: O(1)\n- Insert: O(n)\n- Delete: O(n)\n- Search: O(n)\n\n### Use Cases\n- When you need fast random access\n- When order matters\n- Cache-friendly data structure",
+            "code": "def array_operations():\n    arr = [1, 2, 3, 4, 5]\n    # Access: O(1)\n    first = arr[0]\n    # Insert: O(n)\n    arr.insert(2, 10)\n    # Delete: O(n)\n    arr.pop(2)\n    return arr",
+            "tags_ok": true,
+            "timestamp": "2026-05-06T21:11:40+00:00"
+          }
+        },
+        "q2": {
+          "id": "q2",
+          "label": "String Manipulation",
+          "description": "Techniques for working with strings: reversal, anagrams, palindromes.",
+          "metadata": {
+            "tags": "algorithm, string",
+            "context_tags": "interview-prep",
+            "mermaid": "graph TD\n    A[String Problem] --> B[Check Pattern]\n    A --> C[Transform]\n    B --> D[Palindrome]\n    C --> E[Reverse]",
+            "answer": "## String Algorithms\n\nCommon string operations that appear in interviews.\n\n### Key Techniques\n1. Two-pointer approach\n2. Sliding window\n3. Pattern matching\n4. Hash maps for anagrams",
+            "code": "def is_palindrome(s):\n    left, right = 0, len(s) - 1\n    while left < right:\n        if s[left] != s[right]:\n            return False\n        left += 1\n        right -= 1\n    return True\n\ndef reverse_string(s):\n    return s[::-1]",
+            "tags_ok": true,
+            "timestamp": "2026-05-06T21:11:40+00:00"
+          }
+        },
+        "q3": {
+          "id": "q3",
+          "label": "Sorting Algorithms",
+          "description": "Comparison-based and non-comparison sorting algorithms.",
+          "metadata": {
+            "tags": "algorithm, sort",
+            "context_tags": "code-example",
+            "mermaid": "graph TD\n    A[Sorting] --> B[Comparison]\n    A --> C[Non-Comparison]\n    B --> D[QuickSort]\n    B --> E[MergeSort]\n    C --> F[CountingSort]\n    C --> G[RadixSort]",
+            "answer": "## Sorting Algorithms\n\n### Comparison-Based (O(n log n) lower bound)\n- **QuickSort**: O(n log n) average, O(n²) worst, in-place\n- **MergeSort**: O(n log n) guaranteed, requires O(n) space\n- **HeapSort**: O(n log n) guaranteed, in-place\n\n### Non-Comparison (O(n) possible)\n- **CountingSort**: O(n + k) where k is range\n- **RadixSort**: O(d × n) where d is digit count",
+            "code": "def quicksort(arr):\n    if len(arr) <= 1:\n        return arr\n    pivot = arr[len(arr) // 2]\n    left = [x for x in arr if x < pivot]\n    middle = [x for x in arr if x == pivot]\n    right = [x for x in arr if x > pivot]\n    return quicksort(left) + middle + quicksort(right)",
+            "tags_ok": true,
+            "timestamp": "2026-05-06T21:11:40+00:00"
+          }
+        }
+      }
+    }
+  }
+}

@@ -4,6 +4,23 @@ import json
 from pathlib import Path
 from streamlit.testing.v1 import AppTest
 
+# Import mocking fixtures to make them globally available
+from tests.fixtures.mocking import (
+    MockSuperset,
+    PrepDataLoader,
+    StateEmulator,
+    mock_superset_minimal,
+    mock_superset_full,
+    mock_superset_edge_cases,
+    mock_superset_custom,
+    prep_data_loader,
+    state_emulator,
+    admin_mode,
+    user_mode,
+    mock_process_flags,
+    mock_file_watch,
+)
+
 
 @pytest.fixture
 def app():

@@ -1,0 +1,144 @@
+{
+  "$defs": {
+    "FileSubject": {
+      "additionalProperties": false,
+      "description": "Subject schema for the Data dimension \u2014 a file on disk.",
+      "properties": {
+        "kind": {
+          "const": "file",
+          "title": "Kind",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        },
+        "size_bytes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Size Bytes"
+        }
+      },
+      "required": [
+        "kind",
+        "path"
+      ],
+      "title": "FileSubject",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Envelope contract for the `data` dimension: structural observations of a JSON file (size, depth, key frequency, value-type distribution). Subject is a FileSubject. Observation kinds are $ref'd from observation.schema.json.",
+  "properties": {
+    "captured_at": {
+      "description": "ISO-8601 UTC timestamp.",
+      "title": "Captured At",
+      "type": "string"
+    },
+    "category": {
+      "const": "data",
+      "title": "Category",
+      "type": "string"
+    },
+    "dimension": {
+      "title": "Dimension",
+      "type": "string"
+    },
+    "dimension_version": {
+      "default": 1,
+      "title": "Dimension Version",
+      "type": "integer"
+    },
+    "envelope_name": {
+      "default": "main",
+      "description": "Stable key for this envelope within its (dimension, label). Plugins emit multiple envelopes per `collect()` call (e.g., one per source file or per URL \u00d7 artifact-type); the name keeps them addressable. Default `main` for single-envelope plugins.",
+      "title": "Envelope Name",
+      "type": "string"
+    },
+    "envelope_version": {
+      "default": 2,
+      "description": "Envelope shape version. Bumps when shared top-level fields change. v2 added `envelope_name` for multi-envelope captures.",
+      "title": "Envelope Version",
+      "type": "integer"
+    },
+    "observation_schema_version": {
+      "default": 2,
+      "description": "Observation kind catalog version. Bumps when an observation kind is added, removed, or its shape changes. v2 added the `payload` kind for arbitrary structured data.",
+      "title": "Observation Schema Version",
+      "type": "integer"
+    },
+    "observations": {
+      "items": {
+        "discriminator": {
+          "mapping": {
+            "boolean": "#/$defs/BooleanObservation",
+            "distribution": "#/$defs/DistributionObservation",
+            "histogram": "#/$defs/HistogramObservation",
+            "payload": "#/$defs/PayloadObservation",
+            "rule_check": "#/$defs/RuleCheckObservation",
+            "scalar": "#/$defs/ScalarObservation",
+            "set": "#/$defs/SetObservation"
+          },
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "$ref": "observation.schema.json#/$defs/ScalarObservation"
+          },
+          {
+            "$ref": "observation.schema.json#/$defs/BooleanObservation"
+          },
+          {
+            "$ref": "observation.schema.json#/$defs/RuleCheckObservation"
+          },
+          {
+            "$ref": "observation.schema.json#/$defs/SetObservation"
+          },
+          {
+            "$ref": "observation.schema.json#/$defs/DistributionObservation"
+          },
+          {
+            "$ref": "observation.schema.json#/$defs/HistogramObservation"
+          },
+          {
+            "$ref": "observation.schema.json#/$defs/PayloadObservation"
+          }
+        ]
+      },
+      "title": "Observations",
+      "type": "array"
+    },
+    "subject": {
+      "$ref": "#/$defs/FileSubject"
+    }
+  },
+  "required": [
+    "dimension",
+    "captured_at",
+    "observations",
+    "category",
+    "subject"
+  ],
+  "title": "DataEnvelope",
+  "type": "object"
+}

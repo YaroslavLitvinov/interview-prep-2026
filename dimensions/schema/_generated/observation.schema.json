@@ -1,0 +1,391 @@
+{
+  "$defs": {
+    "BooleanObservation": {
+      "additionalProperties": false,
+      "description": "A binary property (passed/failed, present/missing).",
+      "properties": {
+        "id": {
+          "description": "Stable identifier for the observation.",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "boolean",
+          "title": "Kind",
+          "type": "string"
+        },
+        "label": {
+          "description": "Human-readable label.",
+          "title": "Label",
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "description": "Whether this observation is load-bearing for the snapshot's overall pass/fail. Required observations gate the snapshot; informational ones do not. Default False (informational).",
+          "title": "Required",
+          "type": "boolean"
+        },
+        "value": {
+          "title": "Value",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "kind",
+        "value"
+      ],
+      "title": "BooleanObservation",
+      "type": "object"
+    },
+    "DistributionObservation": {
+      "additionalProperties": false,
+      "description": "A keyed count map (e.g., items per category).",
+      "properties": {
+        "buckets": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Buckets",
+          "type": "object"
+        },
+        "id": {
+          "description": "Stable identifier for the observation.",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "distribution",
+          "title": "Kind",
+          "type": "string"
+        },
+        "label": {
+          "description": "Human-readable label.",
+          "title": "Label",
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "description": "Whether this observation is load-bearing for the snapshot's overall pass/fail. Required observations gate the snapshot; informational ones do not. Default False (informational).",
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "kind",
+        "buckets"
+      ],
+      "title": "DistributionObservation",
+      "type": "object"
+    },
+    "HistogramItem": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "title": "Count",
+          "type": "integer"
+        },
+        "key": {
+          "title": "Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "count"
+      ],
+      "title": "HistogramItem",
+      "type": "object"
+    },
+    "HistogramObservation": {
+      "additionalProperties": false,
+      "description": "A frequency table; only the top-N items are kept.",
+      "properties": {
+        "id": {
+          "description": "Stable identifier for the observation.",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "histogram",
+          "title": "Kind",
+          "type": "string"
+        },
+        "label": {
+          "description": "Human-readable label.",
+          "title": "Label",
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "description": "Whether this observation is load-bearing for the snapshot's overall pass/fail. Required observations gate the snapshot; informational ones do not. Default False (informational).",
+          "title": "Required",
+          "type": "boolean"
+        },
+        "top_n": {
+          "items": {
+            "$ref": "#/$defs/HistogramItem"
+          },
+          "title": "Top N",
+          "type": "array"
+        },
+        "total": {
+          "title": "Total",
+          "type": "integer"
+        },
+        "unique": {
+          "title": "Unique",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "kind",
+        "total",
+        "unique",
+        "top_n"
+      ],
+      "title": "HistogramObservation",
+      "type": "object"
+    },
+    "PayloadObservation": {
+      "additionalProperties": false,
+      "description": "A structured payload of arbitrary shape.\n\nUsed for rich data the fixed-shape kinds cannot carry \u2014 full DOM,\nper-element layout/computed-style tables, accessibility trees,\nscreenshots (as base64), comparison results, and so on. The\n``payload_schema`` field names the shape of ``data``; the framework\ndispatches diff and render on this discriminator. Unknown\n``payload_schema`` values render as a generic JSON dump and diff\nstructurally.",
+      "properties": {
+        "data": {
+          "default": null,
+          "description": "Schema-specific payload \u2014 opaque to the framework.",
+          "title": "Data"
+        },
+        "id": {
+          "description": "Stable identifier for the observation.",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "payload",
+          "title": "Kind",
+          "type": "string"
+        },
+        "label": {
+          "description": "Human-readable label.",
+          "title": "Label",
+          "type": "string"
+        },
+        "payload_schema": {
+          "description": "Discriminator naming the shape of `data`. Recognised values (e.g., 'html', 'elements', 'layered', 'interactive', 'accessibility_tree', 'screenshot', 'comparison') get first-class diff/render; unknown values fall back to a generic JSON dump.",
+          "title": "Payload Schema",
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "description": "Whether this observation is load-bearing for the snapshot's overall pass/fail. Required observations gate the snapshot; informational ones do not. Default False (informational).",
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "kind",
+        "payload_schema"
+      ],
+      "title": "PayloadObservation",
+      "type": "object"
+    },
+    "RuleCheckObservation": {
+      "additionalProperties": false,
+      "description": "A schema/pattern/invariant rule applied to N items.",
+      "properties": {
+        "checked_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Checked Count"
+        },
+        "id": {
+          "description": "Stable identifier for the observation.",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "rule_check",
+          "title": "Kind",
+          "type": "string"
+        },
+        "label": {
+          "description": "Human-readable label.",
+          "title": "Label",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        },
+        "required": {
+          "default": false,
+          "description": "Whether this observation is load-bearing for the snapshot's overall pass/fail. Required observations gate the snapshot; informational ones do not. Default False (informational).",
+          "title": "Required",
+          "type": "boolean"
+        },
+        "violations_count": {
+          "default": 0,
+          "title": "Violations Count",
+          "type": "integer"
+        },
+        "violations_sample": {
+          "items": {},
+          "title": "Violations Sample",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "kind",
+        "passed"
+      ],
+      "title": "RuleCheckObservation",
+      "type": "object"
+    },
+    "ScalarObservation": {
+      "additionalProperties": false,
+      "description": "A single named value (count, latency, size, named string, etc.).",
+      "properties": {
+        "id": {
+          "description": "Stable identifier for the observation.",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "scalar",
+          "title": "Kind",
+          "type": "string"
+        },
+        "label": {
+          "description": "Human-readable label.",
+          "title": "Label",
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "description": "Whether this observation is load-bearing for the snapshot's overall pass/fail. Required observations gate the snapshot; informational ones do not. Default False (informational).",
+          "title": "Required",
+          "type": "boolean"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "value": {
+          "title": "Value"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "kind",
+        "value"
+      ],
+      "title": "ScalarObservation",
+      "type": "object"
+    },
+    "SetObservation": {
+      "additionalProperties": false,
+      "description": "An unordered, deduplicated collection (inventory).",
+      "properties": {
+        "id": {
+          "description": "Stable identifier for the observation.",
+          "title": "Id",
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "kind": {
+          "const": "set",
+          "title": "Kind",
+          "type": "string"
+        },
+        "label": {
+          "description": "Human-readable label.",
+          "title": "Label",
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "description": "Whether this observation is load-bearing for the snapshot's overall pass/fail. Required observations gate the snapshot; informational ones do not. Default False (informational).",
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "kind",
+        "items"
+      ],
+      "title": "SetObservation",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Canonical catalog of observation kinds (scalar, boolean, rule_check, set, distribution, histogram). Discriminated by `kind`. All envelope schemas $ref these definitions instead of inlining them.",
+  "discriminator": {
+    "mapping": {
+      "boolean": "#/$defs/BooleanObservation",
+      "distribution": "#/$defs/DistributionObservation",
+      "histogram": "#/$defs/HistogramObservation",
+      "payload": "#/$defs/PayloadObservation",
+      "rule_check": "#/$defs/RuleCheckObservation",
+      "scalar": "#/$defs/ScalarObservation",
+      "set": "#/$defs/SetObservation"
+    },
+    "propertyName": "kind"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ScalarObservation"
+    },
+    {
+      "$ref": "#/$defs/BooleanObservation"
+    },
+    {
+      "$ref": "#/$defs/RuleCheckObservation"
+    },
+    {
+      "$ref": "#/$defs/SetObservation"
+    },
+    {
+      "$ref": "#/$defs/DistributionObservation"
+    },
+    {
+      "$ref": "#/$defs/HistogramObservation"
+    },
+    {
+      "$ref": "#/$defs/PayloadObservation"
+    }
+  ]
+}

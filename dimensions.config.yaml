@@ -1,0 +1,44 @@
+# Project binding to the dimensions framework.
+# This file declares which plugins to register and which storage backend
+# to use. The framework reads this on every CLI invocation.
+
+schemas_dir: schemas/                      # auto-discover <name>.spec.json → registered as <name>
+
+plugins:
+  # ── Data dimension ─────────────────────────────────────────────────────
+  - name: data
+    module: plugins.data
+    class: DataPlugin
+    config:
+      sources:
+        superset: {path: prep/superset.k.json, spec: superset}
+
+  # ── Visual dimension ───────────────────────────────────────────────────
+  - name: visual
+    module: plugins.visual
+    class: VisualPlugin
+    config:
+      urls:
+        home:             http://172.17.0.1:8501
+        empty-search:     "http://172.17.0.2:8501/?s=non+existing"
+        non-empty-search: "http://172.17.0.2:8501/?s=LLM"
+      viewport:
+        width: 1280
+        height: 720
+      timeout_ms: 15000
+      wait_until: networkidle           # commit | domcontentloaded | load | networkidle
+      wait_after_load_ms: 500           # extra grace for late paints / animations
+      # wait_for_selector: ".stApp"     # optional: pin to an explicit "ready" element
+
+      # `filter`: list of CSS selectors restricting the dom_tree envelope.
+      # Empty/absent → full tree (all elements kept). Anything else →
+      # only matching nodes appear; everything else lands in `skipped`.
+      # `with_hierarchy: true` keeps non-matching ancestors as connectors.
+      # filter: ['div', 'button', 'a[href]']
+      # with_hierarchy: false
+
+backend:
+  type: filesystem
+  path: .dimensions/snapshots
+
+reports_dir: dimensions-reports/

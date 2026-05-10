@@ -1,0 +1,32 @@
+# Knowledge Tool Configuration
+# Configures pluggable model directories and registry
+
+# List of directories containing custom RenderableModel implementations
+pluggable_models_dirs:
+  - ./state_machine/models
+  - ./smart_models
+
+# Model discovery behavior
+model_discovery:
+  # Hot-reload: Re-scan pluggable_models_dirs on each operation (no caching)
+  hot_reload: true
+
+  # Files to scan: any .py file not prefixed with underscore
+  # Each file should contain one or more RenderableModel subclasses
+  pattern: "*.py"
+
+  # Type extraction strategy:
+  # 1. Try to extract type from Literal annotation in the class
+  # 2. Fallback to using class name if type extraction fails
+  type_extraction: "literal_first"
+
+# Environment variables
+environment:
+  # PROJECT_ROOT: automatically set by knowledge_tool (can be overridden)
+  PROJECT_ROOT: "."
+
+# Logging
+logging:
+  level: "INFO"
+  # Log model registry updates on discovery
+  verbose_discovery: false

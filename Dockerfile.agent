@@ -2,7 +2,22 @@ ARG BASE_IMAGE=autopilot-ws-base
 FROM ${BASE_IMAGE}
 
 COPY requirements.txt /requirements.txt
+COPY dimensions/requirements.txt /dimensions_requirements.txt
+USER node
 RUN /home/node/venv/bin/pip install -r /requirements.txt
+RUN /home/node/venv/bin/pip install -r /dimensions_requirements.txt
+USER root
+
+# Playwright system shared libraries (libnss, libatk, libglib, fonts, …)
+# required by the headless chromium browser used by the Visual dimension plugin.
+# Must run as root because it apt-installs system packages.
+RUN /home/node/venv/bin/playwright install-deps chromium
+
+# Playwright chromium binary (~112 MiB). Installed as `node` so it lands in
+# /home/node/.cache/ms-playwright/ where the venv's playwright will look for it.
+USER node
+RUN /home/node/venv/bin/playwright install chromium
+USER root
 
 COPY app/ /app/
 

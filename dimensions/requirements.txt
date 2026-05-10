@@ -1,0 +1,35 @@
+# Dimensions framework dependencies (pip-installable only).
+#
+# The Visual plugin additionally needs a chromium browser binary AND
+# the system shared libraries it links against (libglib, libnss, libatk,
+# fonts, …). Neither is pip-installable, so they live OUTSIDE this file:
+#
+#   * Docker — handled automatically by Dockerfile.agent, which runs
+#       playwright install-deps chromium     (as root, apt)
+#       playwright install chromium          (as node, ~112 MiB binary)
+#     Same binary serves both sync and async Playwright APIs (the framework
+#     uses the async API).
+#
+#   * Bare pip — run those two commands manually after `pip install`.
+#       The first needs sudo; the second does not.
+#
+# Without them, the Visual plugin still loads — it just emits a graceful
+# failure envelope (page.captured=false + page.error rule_check) instead
+# of aborting the run.
+
+# ── core ─────────────────────────────────────────────────────────────────
+pydantic>=2.0
+pyyaml>=6.0
+playwright>=1.40
+
+# DataPlugin uses jsonschema (Draft 2020-12) to validate user-supplied data
+# against compiled specs. Required at runtime for `spec.conforms` checks.
+jsonschema>=4.20.0
+
+# ── optional ─────────────────────────────────────────────────────────────
+# Used by `dimensions.kinds.visual.pixel_diff` for screenshot pixel-level
+# comparison (lazy-imported — capture works without these; only the diff
+# helper needs them). Keep them in the default install for an out-of-the-
+# box experience; remove if you never compare screenshots.
+Pillow>=10.0
+numpy>=1.24

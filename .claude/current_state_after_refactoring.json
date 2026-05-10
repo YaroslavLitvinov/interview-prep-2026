@@ -1,0 +1,392 @@
+{
+  "label": "after_refactoring",
+  "timestamp": "2026-05-07T00:45:27.785478",
+  "content_dimension": {
+    "superset_hash": "58b4531203b74bbdff08edfb09a97d7bc0be76bf3ce296b8d9a3c045e79b23a3",
+    "superset_size_bytes": 1616334,
+    "entity_counts": {
+      "sections": 57,
+      "questions": 358,
+      "tags_total": 2709
+    },
+    "tag_statistics": {
+      "parent_tags": [
+        "algorithm",
+        "analytics",
+        "behavior",
+        "behavioral-story",
+        "cache",
+        "caching",
+        "case-study",
+        "cloud",
+        "code-example",
+        "company",
+        "compression",
+        "concept",
+        "data",
+        "data-structure",
+        "database",
+        "design",
+        "distributed",
+        "framework",
+        "indexing",
+        "infra",
+        "interview",
+        "interview-prep",
+        "interview-technical",
+        "language",
+        "microservice",
+        "ml",
+        "optimization",
+        "pattern",
+        "performance",
+        "quality",
+        "queue",
+        "reliable",
+        "review",
+        "scalability",
+        "scalable",
+        "scaling",
+        "search",
+        "searching",
+        "security",
+        "story",
+        "style",
+        "syntax",
+        "system",
+        "system-design",
+        "testing",
+        "timespace",
+        "tradeoff",
+        "warehouse"
+      ],
+      "hierarchy": {
+        "algorithm": [
+          "analysis",
+          "array",
+          "complexity",
+          "fundamentals",
+          "graph",
+          "hash",
+          "optimization",
+          "queue",
+          "searching",
+          "sorting",
+          "stack",
+          "tree"
+        ],
+        "cache": [
+          "memcached",
+          "redis"
+        ],
+        "case-study": [],
+        "concept": [
+          "adaptability",
+          "async",
+          "design",
+          "evaluation",
+          "legacy",
+          "problem",
+          "rest",
+          "signal",
+          "values"
+        ],
+        "data": [
+          "caching",
+          "indexing",
+          "partitioning",
+          "replication",
+          "sharding",
+          "state",
+          "stream",
+          "streaming",
+          "windowing"
+        ],
+        "indexing": [
+          "latency"
+        ],
+        "optimization": [
+          "complexity"
+        ],
+        "quality": [
+          "code",
+          "deployment",
+          "limits",
+          "management",
+          "refactoring",
+          "resource",
+          "review",
+          "standards",
+          "style",
+          "syntax",
+          "testing"
+        ],
+        "system-design": [],
+        "system": [
+          "architecture",
+          "availability",
+          "components",
+          "consistency",
+          "design",
+          "failover",
+          "microservices",
+          "monitoring",
+          "networking",
+          "recovery",
+          "reliability",
+          "scalability",
+          "split",
+          "topology"
+        ],
+        "company": [
+          "benefits",
+          "compensation",
+          "culture",
+          "equity",
+          "negotiation",
+          "values"
+        ],
+        "queue": [
+          "kafka",
+          "rabbitmq"
+        ],
+        "scalability": [
+          "design"
+        ],
+        "style": [
+          "code"
+        ],
+        "timespace": [
+          "complexity"
+        ],
+        "compression": [
+          "latency"
+        ],
+        "database": [
+          "cassandra",
+          "dynamodb",
+          "hbase",
+          "mongodb",
+          "mysql",
+          "oracle",
+          "postgresql",
+          "sqlite"
+        ],
+        "performance": [
+          "caching",
+          "compression",
+          "indexing",
+          "latency",
+          "optimization",
+          "pipelining",
+          "profiling",
+          "throughput"
+        ],
+        "scaling": [
+          "partitioning",
+          "replication",
+          "sharding"
+        ],
+        "search": [
+          "elasticsearch"
+        ],
+        "security": [
+          "authentication",
+          "authorization",
+          "encryption"
+        ],
+        "reliable": [
+          "architecture"
+        ],
+        "searching": [
+          "array"
+        ],
+        "behavior": [
+          "collaboration",
+          "communication",
+          "conflict",
+          "development",
+          "feedback",
+          "growth",
+          "leadership",
+          "learning",
+          "responsibility"
+        ],
+        "behavioral-story": [],
+        "design": [
+          "api",
+          "decision",
+          "middleware",
+          "pattern",
+          "solution",
+          "tradeoff"
+        ],
+        "interview-prep": [],
+        "interview": [
+          "algorithms",
+          "ambiguity",
+          "architecture",
+          "behavioral",
+          "coding",
+          "communication",
+          "database",
+          "fundamentals",
+          "preparation",
+          "research",
+          "systemdesign",
+          "technical"
+        ],
+        "ml": [
+          "collaborative",
+          "fairness",
+          "rag"
+        ],
+        "caching": [
+          "latency"
+        ],
+        "story": [],
+        "analytics": [
+          "datadog",
+          "grafana",
+          "splunk"
+        ],
+        "scalable": [
+          "architecture"
+        ],
+        "syntax": [
+          "code"
+        ],
+        "testing": [
+          "code"
+        ],
+        "tradeoff": [
+          "design"
+        ],
+        "distributed": [
+          "byzantine",
+          "quorum",
+          "split"
+        ],
+        "review": [
+          "code"
+        ],
+        "framework": [
+          "angular",
+          "django",
+          "express",
+          "fastapi",
+          "flask",
+          "rails",
+          "react",
+          "spring",
+          "vue"
+        ],
+        "language": [
+          "cpp",
+          "go",
+          "java",
+          "javascript",
+          "kotlin",
+          "python",
+          "rust",
+          "scala",
+          "typescript"
+        ],
+        "code-example": [],
+        "interview-technical": [],
+        "data-structure": [
+          "array"
+        ],
+        "pattern": [
+          "array",
+          "design"
+        ],
+        "warehouse": [
+          "bigquery",
+          "redshift",
+          "snowflake"
+        ],
+        "cloud": [
+          "aws",
+          "azure",
+          "gcp"
+        ],
+        "infra": [
+          "ansible",
+          "docker",
+          "jenkins",
+          "kubernetes",
+          "terraform"
+        ],
+        "microservice": [
+          "architecture"
+        ]
+      }
+    },
+    "schema_version": 1
+  },
+  "processing_dimension": {
+    "flagged_hash": "e66017743cb80c1a445ee4fc21ab3bf9bd980a7756034a2a456665ee9ecf8ed4",
+    "flagged_item_count": 0,
+    "flagged_items": []
+  },
+  "ui_state_dimension": {
+    "superset_loadable": true,
+    "tag_system_functional": true,
+    "flagged_system_functional": true,
+    "app_startup": {
+      "python_executable": "/home/node/venv/bin/python3",
+      "python_version": "3.11.2",
+      "imports_available": {
+        "streamlit": "\u2713",
+        "json": "\u2713",
+        "pydantic": "\u2713"
+      },
+      "app_file_exists": true,
+      "tag_utils_exists": true
+    },
+    "app_modules": {
+      "tag_utils.py": {
+        "size_bytes": 3768,
+        "hash": "1be1dfe862fc20c4",
+        "readable": true
+      },
+      "process_flags.py": {
+        "size_bytes": 21777,
+        "hash": "1a54c98b5a788d4f",
+        "readable": true
+      },
+      "interview_prep_app.py": {
+        "size_bytes": 26844,
+        "hash": "9267f590f395b7c8",
+        "readable": true
+      }
+    },
+    "rendering_evidence": {
+      "sections_renderable": true,
+      "questions_renderable": 358,
+      "mermaid_diagrams_available": 358,
+      "answer_sections_available": 0,
+      "code_examples_available": 0
+    },
+    "app_execution_test": {
+      "attempted_import": true,
+      "import_success": true,
+      "import_error": null,
+      "key_functions_exist": {
+        "get_topics": true,
+        "filter_by_tag": true,
+        "format_tag_display": true,
+        "get_tags": true,
+        "prepare_topic_data": true
+      },
+      "session_state_initializable": true,
+      "critical_paths_executable": {
+        "get_topics_works": true,
+        "get_tags_works": true,
+        "format_tag_display_works": true
+      },
+      "execution_timestamp": "2026-05-07T00:45:28.026759"
+    }
+  }
+}

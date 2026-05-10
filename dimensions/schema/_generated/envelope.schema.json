@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Thin discriminated union over every dimension's envelope, keyed by `category`. Use this to validate a snapshot when the producing dimension is not known up front (generic loaders, renderers, diff engines). Members are $ref'd from per-dimension files.",
+  "discriminator": {
+    "mapping": {
+      "data": "data.envelope.schema.json",
+      "visual": "visual.envelope.schema.json"
+    },
+    "propertyName": "category"
+  },
+  "oneOf": [
+    {
+      "$ref": "data.envelope.schema.json"
+    },
+    {
+      "$ref": "visual.envelope.schema.json"
+    }
+  ],
+  "title": "Envelope"
+}
