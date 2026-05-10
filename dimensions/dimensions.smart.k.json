@@ -55,7 +55,13 @@
           "metadata": {},
           "opts": {},
           "shape": "rect",
-          "links": [],
+          "links": [
+            {
+              "target": "screen_map",
+              "label": "emits",
+              "style": "arrow"
+            }
+          ],
           "children": {}
         },
         "web_dimension": {
@@ -115,6 +121,11 @@
           "target": "dimensions",
           "label": "emit data for",
           "style": "arrow"
+        },
+        {
+          "target": "validation",
+          "label": "self-tested via",
+          "style": "dotted"
         }
       ],
       "children": {
@@ -139,7 +150,13 @@
           "metadata": {},
           "opts": {},
           "shape": "rect",
-          "links": [],
+          "links": [
+            {
+              "target": "schema_generation",
+              "label": "validated by",
+              "style": "arrow"
+            }
+          ],
           "children": {}
         },
         "envelope_lifecycle": {
@@ -177,6 +194,89 @@
           "shape": "rect",
           "links": [],
           "children": {}
+        },
+        "injection_protocol": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "injection_protocol",
+          "label": "Injection Protocol",
+          "description": "The seam between plugin and the outside world. Each dimension's plugin depends on an abstract protocol \u2014 BrowserProtocol for visual, DataProtocol for data, WebProtocol for web \u2014 that the plugin drives to obtain raw observations. The framework provides one default real implementation per protocol (Playwright for BrowserProtocol). Sibling implementations (fakes, recorders, fixture replay) plug in without touching the plugin code. This is what makes the framework testable, mockable, and reproducible.",
+          "metadata": {
+            "location": "dimensions/injection.py, dimensions/kinds/<dim>/injection.py"
+          },
+          "opts": {},
+          "shape": "stadium",
+          "links": [
+            {
+              "target": "fixture_protocols",
+              "label": "mirrored by",
+              "style": "arrow"
+            }
+          ],
+          "children": {
+            "browser_protocol": {
+              "type": "SmartDocument",
+              "model_version": 1,
+              "id": "browser_protocol",
+              "label": "BrowserProtocol",
+              "description": "Visual-dimension protocol: render a URL, return a PageState (DOM walk + computed styles + bbox + screenshot). Default implementation is PlaywrightBrowserProtocol, which drives Chromium. PageState is the typed contract \u2014 every browser implementation, real or fake, must produce one.",
+              "metadata": {
+                "status": "implemented",
+                "location": "dimensions/kinds/visual/injection.py"
+              },
+              "opts": {},
+              "shape": "rect",
+              "links": [
+                {
+                  "target": "visual_dimension",
+                  "label": "drives",
+                  "style": "arrow"
+                }
+              ],
+              "children": {}
+            },
+            "data_protocol": {
+              "type": "SmartDocument",
+              "model_version": 1,
+              "id": "data_protocol",
+              "label": "DataProtocol",
+              "description": "Data-dimension protocol: read a file path, return a DataState (raw bytes, parsed JSON, schema match results). Default implementation reads from the local filesystem. Sibling implementations replay fixtures or stream from cloud storage.",
+              "metadata": {
+                "status": "implemented",
+                "location": "dimensions/kinds/data/"
+              },
+              "opts": {},
+              "shape": "rect",
+              "links": [
+                {
+                  "target": "data_dimension",
+                  "label": "drives",
+                  "style": "arrow"
+                }
+              ],
+              "children": {}
+            },
+            "web_protocol": {
+              "type": "SmartDocument",
+              "model_version": 1,
+              "id": "web_protocol",
+              "label": "WebProtocol",
+              "description": "Web-dimension protocol: send a request to an endpoint, return a WebState (status, headers, body, timing). Default implementation uses httpx. Sibling implementations replay recorded responses (mitmproxy-style) for deterministic testing.",
+              "metadata": {
+                "status": "designed"
+              },
+              "opts": {},
+              "shape": "rect",
+              "links": [
+                {
+                  "target": "web_dimension",
+                  "label": "drives",
+                  "style": "arrow"
+                }
+              ],
+              "children": {}
+            }
+          }
         }
       }
     },
@@ -189,7 +289,13 @@
       "metadata": {},
       "opts": {},
       "shape": "rect",
-      "links": [],
+      "links": [
+        {
+          "target": "entity_id",
+          "label": "stamped with",
+          "style": "arrow"
+        }
+      ],
       "children": {
         "snapshot_envelope": {
           "type": "SmartDocument",
@@ -311,6 +417,36 @@
               "children": {}
             }
           }
+        },
+        "schema_generation": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "schema_generation",
+          "label": "JSON Schema Generation",
+          "description": "Pydantic models in dimensions/schema/ are the canonical envelope contracts. A generator (dimensions/schema/_generate.py) auto-produces JSON Schema files in dimensions/schema/_generated/ that external tools, cross-language plugins, and CI validators consume. The Pydantic model is the source of truth; the JSON Schema is the public-facing contract. Re-running the generator is the only way to update the schemas \u2014 they are never hand-edited. This is the indirection that decouples the public envelope contract from its internal Pydantic implementation.",
+          "metadata": {
+            "location": "dimensions/schema/_generate.py, dimensions/schema/_generated/"
+          },
+          "opts": {},
+          "shape": "hexagon",
+          "links": [
+            {
+              "target": "snapshot_envelope",
+              "label": "validates",
+              "style": "arrow"
+            },
+            {
+              "target": "spec_envelope",
+              "label": "validates",
+              "style": "arrow"
+            },
+            {
+              "target": "report_envelope",
+              "label": "validates",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
         }
       }
     },
@@ -332,6 +468,11 @@
         {
           "target": "report_envelope",
           "label": "produces",
+          "style": "arrow"
+        },
+        {
+          "target": "inline_review",
+          "label": "embeds",
           "style": "arrow"
         }
       ],
@@ -370,6 +511,523 @@
           "opts": {},
           "shape": "rect",
           "links": [],
+          "children": {}
+        }
+      }
+    },
+    "identifiers": {
+      "type": "SmartDocument",
+      "model_version": 1,
+      "id": "identifiers",
+      "label": "Identifiers",
+      "description": "First-class content-derived identifier primitives. Every observation gets an entity_id; every UI element gets a UIPath; every screen has a Screen Map indexed by UIPath. These are the address space the rest of the framework refers to \u2014 stable across recapture, validatable against the captured snapshot, deterministically derivable.",
+      "metadata": {},
+      "opts": {},
+      "shape": "rect",
+      "links": [
+        {
+          "target": "envelope",
+          "label": "stamps",
+          "style": "arrow"
+        }
+      ],
+      "children": {
+        "entity_id": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "entity_id",
+          "label": "entity_id",
+          "description": "Content-derived stable id stamped on every observation by the framework's EnvelopeBuilder. Hash of (dimension, envelope_name, observation_id, kind, payload_schema) \u2192 e_<16-hex>. Same logical observation always gets the same id; recapture preserves it. Implemented in dimensions/api.py via EnvelopeBuilder._stamp_entity_id; surfaced as an optional observation field via the Pydantic schema.",
+          "metadata": {
+            "status": "implemented",
+            "location": "dimensions/api.py"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "comment_model",
+              "label": "primary anchor",
+              "style": "arrow"
+            },
+            {
+              "target": "generic_properties",
+              "label": "asserted unique by",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        },
+        "ui_path": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "ui_path",
+          "label": "UIPath",
+          "description": "Canonical, content-derived locator for one element on one screen. Class-free, recapture-stable, human-readable, deterministically resolvable. Bridges every layer that needs to refer to a UI element \u2014 diff matching, comment anchoring, scenario steps, LLM-generated tests. Naming note: not a standard term \u2014 closest siblings are CSS Selectors, XPath, Playwright Locators, ARIA tree paths. The grammar is defined within the framework.",
+          "metadata": {
+            "status": "designed",
+            "target_pr": "PR2",
+            "planned_location": "dimensions/uipath/"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "screen_map",
+              "label": "keys of",
+              "style": "arrow"
+            },
+            {
+              "target": "scenarios",
+              "label": "step target type",
+              "style": "arrow"
+            },
+            {
+              "target": "comment_model",
+              "label": "alternative anchor",
+              "style": "dotted"
+            }
+          ],
+          "children": {
+            "ui_path_grammar": {
+              "type": "SmartDocument",
+              "model_version": 1,
+              "id": "ui_path_grammar",
+              "label": "Grammar (pinned in PR2)",
+              "description": "Pinned BNF: UIPath := segment (' > ' segment)*; segment := tag selector*; selector := '[testid=...]' | '[id=...]' | '[role=...]' | '[name=...]' | '[class=...]' | ':nth(N)'. The canonical form for any node is the shortest path that resolves to exactly one element. Selector priority drives canonicalization: testid \u2192 id \u2192 role+name \u2192 name \u2192 class \u2192 :nth.",
+              "metadata": {},
+              "opts": {},
+              "shape": "hexagon",
+              "links": [],
+              "children": {}
+            },
+            "ui_path_stability": {
+              "type": "SmartDocument",
+              "model_version": 1,
+              "id": "ui_path_stability",
+              "label": "Stability Tier",
+              "description": "Per-path classification \u2014 STRONG (testid or id present in chain), MEDIUM (role+name or name attributes), WEAK (pure structural / :nth fallback). Reports surface the tier inline so reviewers see anchor risk; CI lint can reject WEAK-only Scenario steps. Pushes app teams toward adding testids where it matters.",
+              "metadata": {},
+              "opts": {},
+              "shape": "rhombus",
+              "links": [],
+              "children": {}
+            },
+            "ui_path_operations": {
+              "type": "SmartDocument",
+              "model_version": 1,
+              "id": "ui_path_operations",
+              "label": "Operations",
+              "description": "Two contracts the framework guarantees: parse/format round-trip (parse(format(p)) == p) and resolve-after-derive (from_node(n, walk).resolve(walk) is n). Both pinned by hypothesis tests in PR2. Resolve returns 0 or 1 nodes, never multiple \u2014 a path that resolves to multiple was not derived canonically and the call returns None.",
+              "metadata": {},
+              "opts": {},
+              "shape": "rect",
+              "links": [],
+              "children": {}
+            }
+          }
+        },
+        "screen_map": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "screen_map",
+          "label": "Screen Map",
+          "description": "A flat per-screen JSON listing every meaningful UIPath with its role, accessible name, bbox, interactivity, and stability tier. Smaller (5\u201350\u00d7) and more semantically labeled than the raw dom_tree payload. Emitted by the visual plugin alongside dom_tree as a new payload schema. The artifact that LLM discovery, scenario authors, and reviewers all read.",
+          "metadata": {
+            "status": "designed",
+            "target_pr": "PR2",
+            "planned_location": "dimensions/kinds/visual/primitives.py:emit_screen_map"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "visual_dimension",
+              "label": "emitted by",
+              "style": "arrow"
+            },
+            {
+              "target": "llm_discovery",
+              "label": "consumed by",
+              "style": "dotted"
+            }
+          ],
+          "children": {}
+        }
+      }
+    },
+    "review": {
+      "type": "SmartDocument",
+      "model_version": 1,
+      "id": "review",
+      "label": "Review",
+      "description": "Collaboration layer over snapshots and reports. Comments and resolutions anchored to entity_id (today) or UIPath (post-PR3), persisted as a sidecar JSON next to each snapshot label. Reports embed comments inline; the optional service exposes live read/write via HTTP. Self-contained HTML when the service is offline.",
+      "metadata": {},
+      "opts": {},
+      "shape": "rect",
+      "links": [
+        {
+          "target": "rendering",
+          "label": "embedded in",
+          "style": "arrow"
+        },
+        {
+          "target": "entity_id",
+          "label": "anchors to",
+          "style": "arrow"
+        }
+      ],
+      "children": {
+        "comment_model": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "comment_model",
+          "label": "Comment & Resolution Models",
+          "description": "Pydantic Comment with id, parent_document_id ('<dim>/<label>/<envelope_name>'), parent_entity_id (None for report-level comments), date, author, text. Resolution subclass adds resolution=approved|denied. Validated through the same TypeAdapter the framework uses everywhere; round-trips cleanly through model_dump_json.",
+          "metadata": {
+            "status": "implemented",
+            "location": "dimensions/comments.py"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "sidecar_storage": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "sidecar_storage",
+          "label": "Sidecar Storage",
+          "description": "comments.json file per snapshot label at <base_dir>/<dim>/<label>/comments.json. Flat list of entries (Comment | Resolution union, validated via TypeAdapter). Read by load_comments at render time and at service request time; appended to by append_entry (CLI write or service write). Snapshot data files never touch the comments file and vice versa.",
+          "metadata": {
+            "status": "implemented",
+            "location": "dimensions/comments.py"
+          },
+          "opts": {},
+          "shape": "cylinder",
+          "links": [],
+          "children": {}
+        },
+        "cli_comment_commands": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "cli_comment_commands",
+          "label": "CLI Commands",
+          "description": "dimensions <dim> comment add|resolve|list <label> --envelope --entity-id --author --text [--resolution]. Phase A workflow \u2014 author comments without running a service. Re-render the report to see them embedded. Omit --entity-id to attach a comment to the whole report.",
+          "metadata": {
+            "status": "implemented",
+            "location": "dimensions/cli/main.py:cmd_comment"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "inline_review": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "inline_review",
+          "label": "Inline Review (Phase A)",
+          "description": "HTML reports embed the comments list as a JSON island plus identity (dimension, label, envelope_name, kind=snapshot|diff). Every observation card carries data-entity-id; embedded JS finds matching comments and renders threads beneath each card. Report-level comments render as a section at the top. Self-contained \u2014 works from file:// without a server.",
+          "metadata": {
+            "status": "implemented",
+            "location": "dimensions/renderers/html.py"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "comments_service": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "comments_service",
+          "label": "Comments Service (Phase B)",
+          "description": "Optional FastAPI process serving the rendered reports tree statically and exposing /api/comments (GET/POST) and /api/resolutions (POST) backed by the same sidecar JSON files the CLI writes. Reports auto-detect availability via /api/health and switch to live mode (fetch + post form per observation). The --api-base render flag pins the base URL when reports and API live on different origins.",
+          "metadata": {
+            "status": "implemented",
+            "location": "dimensions/comments_server.py"
+          },
+          "opts": {},
+          "shape": "subroutine",
+          "links": [
+            {
+              "target": "sidecar_storage",
+              "label": "read/write",
+              "style": "arrow"
+            },
+            {
+              "target": "rendering",
+              "label": "serves",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        }
+      }
+    },
+    "validation": {
+      "type": "SmartDocument",
+      "model_version": 1,
+      "id": "validation",
+      "label": "Validation",
+      "description": "Plugin self-testing layer. Fixture protocols replay pre-recorded inputs through the same plugin code path real captures use; the framework asserts a small set of generic properties on every produced envelope. Scenarios live as JSON files alongside plugin code; pytest auto-discovers and runs them. Hypothesis (later) and LLM discovery (later) feed scenarios into the same harness.",
+      "metadata": {},
+      "opts": {},
+      "shape": "rect",
+      "links": [
+        {
+          "target": "plugins",
+          "label": "tests",
+          "style": "arrow"
+        },
+        {
+          "target": "envelope",
+          "label": "asserts shape of",
+          "style": "arrow"
+        }
+      ],
+      "children": {
+        "fixture_protocols": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "fixture_protocols",
+          "label": "Fixture Protocols",
+          "description": "Sibling implementations of each InjectionProtocol (FixtureBrowserProtocol, FixtureDataProtocol, FixtureWebProtocol) that replay pre-recorded state instead of driving the real seam. Same plugin code path; deterministic input source. The same swap-the-protocol pattern that lets the framework substitute Playwright with a fake.",
+          "metadata": {
+            "status": "designed",
+            "target_pr": "PR1",
+            "planned_location": "dimensions/testing/protocols.py"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "plugins",
+              "label": "intercepts seam of",
+              "style": "dotted"
+            },
+            {
+              "target": "injection_protocol",
+              "label": "sibling impl of",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        },
+        "scenarios": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "scenarios",
+          "label": "Scenarios",
+          "description": "Pydantic Scenario {name, plugin, protocol, fixture, steps, expectations}. Step has action (visit|click|type|submit|expect_text|expect_visible), target (UIPath string in PR1; typed UIPath in PR3), value. JSON files live in plugins/<name>/scenarios/. Forward-compatible with the UIPath grammar \u2014 strings written today parse identically once the grammar lands.",
+          "metadata": {
+            "status": "designed",
+            "target_pr": "PR1",
+            "planned_location": "dimensions/testing/scenarios.py"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "fixture_protocols",
+              "label": "replayed via",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        },
+        "replay_harness": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "replay_harness",
+          "label": "Replay Harness",
+          "description": "pytest-discovered cases, one per scenario file. Loads the JSON, wraps the fixture in the matching fixture protocol, runs the plugin's collect, asserts generic properties + scenario-specific expectations. Lives in dimensions/testing/conftest.py so any project that includes the framework gets the discovery for free.",
+          "metadata": {
+            "status": "designed",
+            "target_pr": "PR1"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "scenarios",
+              "label": "loads",
+              "style": "arrow"
+            },
+            {
+              "target": "generic_properties",
+              "label": "runs",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        },
+        "generic_properties": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "generic_properties",
+          "label": "Generic Properties",
+          "description": "Per-envelope contracts the framework promises and the test layer enforces \u2014 entity_ids unique within an envelope, envelope round-trips through the schema, diff(env, env) is empty (idempotence). Run automatically on every scenario; failing any of them breaks every plugin's tests because the framework itself just lied.",
+          "metadata": {
+            "status": "designed",
+            "target_pr": "PR1",
+            "planned_location": "dimensions/testing/properties.py"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "envelope",
+              "label": "round-trips",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        }
+      }
+    },
+    "roadmap": {
+      "type": "SmartDocument",
+      "model_version": 1,
+      "id": "roadmap",
+      "label": "Roadmap",
+      "description": "Designed but not yet built. Each child is a cross-cutting capability with explicit links to the existing parts it would affect. Roadmap items are not promises \u2014 they are the next reachable surfaces the framework can grow into without restructuring its existing primitives.",
+      "metadata": {},
+      "opts": {},
+      "shape": "hexagon",
+      "links": [],
+      "children": {
+        "ui_path_adoption": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "ui_path_adoption",
+          "label": "UIPath Adoption (PR3)",
+          "description": "Diff layer's _path_keys becomes a thin wrapper around uipath.from_node so diff and Scenario references speak the same language. Scenario.Step.target retypes from str to UIPath with full validation. Comment gains optional parent_uipath sibling to parent_entity_id for element-level anchoring. HTML renderer adds bbox-overlay JS so clicking a UIPath highlights the corresponding region on the screenshot.",
+          "metadata": {
+            "status": "planned",
+            "target_pr": "PR3"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "ui_path",
+              "label": "promotes",
+              "style": "arrow"
+            },
+            {
+              "target": "scenarios",
+              "label": "retypes target",
+              "style": "arrow"
+            },
+            {
+              "target": "comment_model",
+              "label": "extends anchor",
+              "style": "arrow"
+            },
+            {
+              "target": "rendering",
+              "label": "adds overlay",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        },
+        "hypothesis_corpus": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "hypothesis_corpus",
+          "label": "Hypothesis Corpus",
+          "description": "Hypothesis strategies (per InjectionProtocol return type) generate synthetic PageStates, datasets, web responses. A 'freeze' CLI runs hypothesis once and dumps N shrunken examples into plugins/<name>/scenarios/. CI replays the frozen corpus deterministically \u2014 hypothesis is a generator, never a runtime test runner. Strategies optionally derive from Pydantic JSON Schema for zero-author-effort fuzz coverage.",
+          "metadata": {
+            "status": "planned",
+            "depends_on": "validation"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "scenarios",
+              "label": "produces",
+              "style": "arrow"
+            },
+            {
+              "target": "validation",
+              "label": "extends",
+              "style": "dotted"
+            }
+          ],
+          "children": {}
+        },
+        "llm_discovery": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "llm_discovery",
+          "label": "LLM Discovery",
+          "description": "Consumes a captured Screen Map and proposes user journeys, cross-dimension invariants, and realistic input seeds as Pydantic-validated JSON. Same freeze\u2192replay model as hypothesis corpus \u2014 LLM runs once at discovery time, output is committed and reviewed, CI replays deterministically. Validator rejects any UIPath the LLM invents that doesn't resolve in the source snapshot \u2014 confabulation is closed off by construction.",
+          "metadata": {
+            "status": "planned"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "screen_map",
+              "label": "consumes",
+              "style": "arrow"
+            },
+            {
+              "target": "scenarios",
+              "label": "produces",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        },
+        "intentional_change_approval": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "intentional_change_approval",
+          "label": "Intentional Change Approval",
+          "description": "Per-class change approval \u2014 a small JSON file declaring 'all color changes from rgb(A) to rgb(B) within scope=any are intentional'. Diffs render approved classes muted; unapproved changes stand out. Solves the 'designer ships a new theme \u2192 400 noisy diffs' problem. Each rule is a tiny, reviewable statement (one PR per rule), composes cleanly, and can carry an expiry date.",
+          "metadata": {
+            "status": "planned"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "rendering",
+              "label": "mutes approved in",
+              "style": "arrow"
+            },
+            {
+              "target": "review",
+              "label": "rule-level approval surface",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        },
+        "determinism_image": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "determinism_image",
+          "label": "Determinism Image",
+          "description": "Pinned Docker image bundling browser binary, fonts, recording proxy, and init scripts (frozen Date.now, seeded Math.random, prefers-reduced-motion forced). Captures become bit-stable across machines. The leverage point that makes signal trustable \u2014 without it, half the diff surface is timing noise no matter how clever the diff layer is.",
+          "metadata": {
+            "status": "planned"
+          },
+          "opts": {},
+          "shape": "hexagon",
+          "links": [
+            {
+              "target": "visual_dimension",
+              "label": "runs in",
+              "style": "arrow"
+            }
+          ],
           "children": {}
         }
       }

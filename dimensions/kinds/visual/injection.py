@@ -26,18 +26,6 @@ from dimensions.injection import BaseInjectionProtocol
 # ── PageState ─────────────────────────────────────────────────────────────
 
 
-ELEMENT_COLUMNS: List[str] = [
-    "selector", "tag", "id", "classes", "attributes", "text",
-    "x", "y", "width", "height", "z_index", "position", "visible",
-    "computed_style",
-]
-
-INTERACTIVE_COLUMNS: List[str] = [
-    "selector", "role", "name", "tag", "type", "enabled",
-    "x", "y", "width", "height",
-]
-
-
 @dataclass(frozen=True)
 class PageState:
     """Everything a visual plugin needs from one URL render."""
@@ -48,11 +36,6 @@ class PageState:
     url: str = ""
     title: str = ""
     viewport: Dict[str, int] = field(default_factory=dict)
-    html: str = ""
-    elements: List[Dict[str, Any]] = field(default_factory=list)
-    layered: List[Dict[str, Any]] = field(default_factory=list)
-    interactive: List[Dict[str, Any]] = field(default_factory=list)
-    accessibility_tree: Optional[Dict[str, Any]] = None
     # Hierarchical DOM walk: flat list ordered by pre-order traversal,
     # each node carries `idx`, `parent`, `kept`, plus all per-element fields
     # (tag/attrs/bbox/computed_style/role/…). The visual plugin folds this
@@ -110,7 +93,6 @@ class PlaywrightBrowserProtocol(BrowserProtocol):
         browser_type: str = "chromium",
         *,
         capture_screenshot: bool = True,
-        capture_accessibility: bool = True,
         full_page_screenshot: bool = True,
         wait_until: str = "networkidle",
         wait_for_selector: Optional[str] = None,
@@ -135,7 +117,6 @@ class PlaywrightBrowserProtocol(BrowserProtocol):
         self.browser_type = browser_type
         self.engine = browser_type
         self.capture_screenshot = capture_screenshot
-        self.capture_accessibility = capture_accessibility
         self.full_page_screenshot = full_page_screenshot
         self.wait_until = wait_until
         self.wait_for_selector = wait_for_selector
@@ -216,39 +197,10 @@ class PlaywrightBrowserProtocol(BrowserProtocol):
                 if self.wait_after_load_ms:
                     await page.wait_for_timeout(self.wait_after_load_ms)
 
-                html = await page.content()
                 title = await page.title()
-                elements = await page.evaluate(_JS_COLLECT_ELEMENTS)
-                layered = [
-                    el for el in elements
-                    if (el.get("position") and el.get("position") != "static")
-                    or (
-                        isinstance(el.get("z_index"), int)
-                        and el.get("z_index") not in (0, None)
-                    )
-                ]
-                interactive = await page.evaluate(_JS_COLLECT_INTERACTIVE)
                 dom_walk = await page.evaluate(
                     _JS_DOM_WALK, list(tree_filter or []),
                 )
-
-                a11y: Optional[Dict[str, Any]] = None
-                if self.capture_accessibility:
-                    try:
-                        if hasattr(page, "accessibility"):
-                            a11y = {
-                                "format": "tree",
-                                "tree": await page.accessibility.snapshot(
-                                    interesting_only=False
-                                ),
-                            }
-                        elif hasattr(page, "aria_snapshot"):
-                            a11y = {
-                                "format": "aria_yaml",
-                                "yaml": await page.aria_snapshot(),
-                            }
-                    except Exception:  # noqa: BLE001
-                        a11y = None
 
                 screenshot_bytes: Optional[bytes] = None
                 if self.capture_screenshot:
@@ -262,9 +214,6 @@ class PlaywrightBrowserProtocol(BrowserProtocol):
                 return PageState(
                     available=True, loaded=True, status=status,
                     url=url, title=title, viewport=dict(viewport),
-                    html=html, elements=list(elements), layered=layered,
-                    interactive=list(interactive),
-                    accessibility_tree=a11y,
                     dom_walk=list(dom_walk),
                     screenshot=screenshot_bytes, screenshot_format="png",
                 )
@@ -363,62 +312,6 @@ def pixel_diff(before_bytes: bytes, after_bytes: bytes) -> Dict[str, Any]:
 # ── JavaScript snippets evaluated in the page ─────────────────────────────
 
 
-_JS_COLLECT_ELEMENTS = r"""
-() => {
-  function cssPath(el) {
-    if (!(el instanceof Element)) return '';
-    const parts = [];
-    while (el && el.nodeType === 1 && parts.length < 8) {
-      let part = el.nodeName.toLowerCase();
-      if (el.id) { part += '#' + el.id; parts.unshift(part); break; }
-      if (el.classList && el.classList.length) {
-        part += '.' + Array.from(el.classList).slice(0, 2).join('.');
-      }
-      const parent = el.parentElement;
-      if (parent) {
-        const sibs = Array.from(parent.children).filter(
-          c => c.nodeName === el.nodeName
-        );
-        if (sibs.length > 1) part += `:nth-of-type(${sibs.indexOf(el) + 1})`;
-      }
-      parts.unshift(part);
-      el = el.parentElement;
-    }
-    return parts.join(' > ');
-  }
-  const out = [];
-  document.querySelectorAll('*').forEach(el => {
-    const r = el.getBoundingClientRect();
-    const cs = window.getComputedStyle(el);
-    const attrs = {};
-    for (const a of el.attributes) attrs[a.name] = a.value;
-    const computed = {};
-    [
-      'color','background-color','font-family','font-size','font-weight',
-      'display','position','z-index','opacity','visibility','overflow'
-    ].forEach(k => { computed[k] = cs.getPropertyValue(k); });
-    const z = cs.getPropertyValue('z-index');
-    const zi = (z === 'auto' || z === '') ? 0 : parseInt(z, 10);
-    out.push({
-      selector: cssPath(el),
-      tag: el.tagName.toLowerCase(),
-      id: el.id || '',
-      classes: Array.from(el.classList || []),
-      attributes: attrs,
-      text: (el.textContent || '').trim().slice(0, 200),
-      x: Math.round(r.x), y: Math.round(r.y),
-      width: Math.round(r.width), height: Math.round(r.height),
-      z_index: Number.isNaN(zi) ? 0 : zi,
-      position: cs.getPropertyValue('position') || 'static',
-      visible: !!(r.width && r.height && cs.getPropertyValue('display') !== 'none'
-                  && cs.getPropertyValue('visibility') !== 'hidden'),
-      computed_style: computed,
-    });
-  });
-  return out;
-}
-"""
-
 _JS_DOM_WALK = r"""
 (selectors) => {
   // Pre-order walk of the DOM, returning a flat list with parent indices
@@ -471,35 +364,6 @@ _JS_DOM_WALK = r"""
     for (const child of el.children) walk(child, idx);
   }
   walk(document.documentElement, -1);
-  return out;
-}
-"""
-
-
-_JS_COLLECT_INTERACTIVE = r"""
-() => {
-  const SEL = 'button, a[href], input, textarea, select, [role], [tabindex], [onclick]';
-  const out = [];
-  document.querySelectorAll(SEL).forEach(el => {
-    const r = el.getBoundingClientRect();
-    out.push({
-      selector: (el.id ? '#' + el.id : el.tagName.toLowerCase()),
-      role: el.getAttribute('role')
-            || (el.tagName === 'A' ? 'link'
-              : el.tagName === 'BUTTON' ? 'button'
-              : el.tagName === 'INPUT' ? (el.type || 'input')
-              : el.tagName.toLowerCase()),
-      name: (el.getAttribute('aria-label')
-             || el.getAttribute('name')
-             || el.getAttribute('value')
-             || (el.textContent || '').trim() || '').slice(0, 120),
-      tag: el.tagName.toLowerCase(),
-      type: el.getAttribute('type') || '',
-      enabled: !el.disabled,
-      x: Math.round(r.x), y: Math.round(r.y),
-      width: Math.round(r.width), height: Math.round(r.height),
-    });
-  });
   return out;
 }
 """

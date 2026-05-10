@@ -1,7 +1,7 @@
 """Framework primitives for the Visual dimension.
 
 The visual plugin opens two envelopes per URL — ``<url>.tree`` (page
-status + a11y rule check + hierarchical DOM with styles/layout/role)
+status + hierarchical DOM with styles/layout/role)
 and ``<url>.screenshot`` (PNG asset). Every helper below is a pure
 function over ``(EnvelopeBuilder, PageState)`` — no I/O, no Playwright
 awareness.
@@ -57,13 +57,7 @@ def emit_tree(
 
     Observations:
 
-      • ``browser.available``    — boolean: protocol initialised
-      • ``page.loaded``          — boolean: navigation succeeded with a 2xx
-      • ``page.status_code``     — scalar: HTTP status
-      • ``page.title``           — scalar: document title
-      • ``viewport.width/height``— scalar (px)
       • ``page.error``           — rule_check (only on failure)
-      • ``a11y.images_have_alt`` — rule_check derived from the walk
       • ``page.dom_tree``        — payload (schema=dom_tree)
       • ``page.captured``        — boolean: terminator
 
@@ -79,11 +73,6 @@ def emit_tree(
       * ``skipped`` lists every element not present in the tree, with the
         reason it was excluded.
     """
-    env.boolean(
-        "browser.available", "Browser injection protocol initialised",
-        state.available,
-    )
-
     if not state.available:
         env.boolean("page.captured", "Visual capture completed without error", False)
         env.rule_check(
@@ -93,17 +82,6 @@ def emit_tree(
             checked_count=1,
         )
         return
-
-    env.boolean("page.loaded", "Page loaded with a successful response", state.loaded)
-    env.scalar("page.status_code", "HTTP status code", state.status)
-    env.scalar(
-        "viewport.width", "Viewport width",
-        state.viewport.get("width", 0), unit="px",
-    )
-    env.scalar(
-        "viewport.height", "Viewport height",
-        state.viewport.get("height", 0), unit="px",
-    )
 
     if not state.loaded:
         if state.error:
@@ -117,24 +95,7 @@ def emit_tree(
         )
         return
 
-    env.scalar("page.title", "Page title", state.title)
-
     walk = list(state.dom_walk or [])
-
-    # Image alt rule check derived from the walk — every <img> without
-    # an `alt` attribute is a violation.
-    images = [n for n in walk if n.get("tag") == "img"]
-    missing_alt = [
-        n.get("attributes", {}).get("src", "")
-        for n in images
-        if "alt" not in (n.get("attributes") or {})
-    ]
-    env.rule_check(
-        "a11y.images_have_alt", "Every <img> has an alt attribute",
-        passed=len(missing_alt) == 0,
-        violations=[{"src": (s or "")[:100]} for s in missing_alt],
-        checked_count=len(images),
-    )
 
     root, kept_count, skipped = _build_tree(
         walk, tree_filter or None, with_hierarchy,
@@ -154,7 +115,89 @@ def emit_tree(
         },
     )
 
+    env.payload(
+        "page.screen_map",
+        "Screen Map (UIPath-keyed element index)",
+        payload_schema="screen_map",
+        data=_build_screen_map(walk, state.url),
+    )
+
     env.boolean("page.captured", "Visual capture completed without error", True)
+
+
+def _build_screen_map(walk, url: str) -> Dict[str, Any]:
+    """Flatten a DOM walk into a screen_map payload.
+
+    The map is keyed by canonical UIPath strings; values carry just
+    enough to identify and locate the element (tag, role, accessible
+    name, bbox, interactivity, stability tier). The full computed style
+    and attributes stay in dom_tree — screen_map is the *referenceable*
+    summary, not a duplicate.
+    """
+    from dimensions.uipath import derive_all, format_uipath, stability
+
+    if not walk:
+        return {
+            "url": url,
+            "elements": {},
+            "interactives": [],
+            "headings": [],
+            "forms": [],
+        }
+
+    paths = derive_all(walk)
+    by_idx = {n["idx"]: n for n in walk}
+
+    interactive_tags = {"a", "button", "input", "select", "textarea", "label"}
+    heading_tags = {"h1", "h2", "h3", "h4", "h5", "h6"}
+    form_tags = {"form"}
+
+    elements: Dict[str, Any] = {}
+    interactives: List[str] = []
+    headings: List[str] = []
+    forms: List[str] = []
+
+    for idx, node in by_idx.items():
+        path = paths[idx]
+        key = format_uipath(path)
+        attrs = node.get("attributes") or {}
+        tag = (node.get("tag") or "").lower()
+        role = attrs.get("role") or node.get("role")
+        accessible_name = (
+            attrs.get("aria-label")
+            or node.get("aria_label")
+            or attrs.get("name")
+        )
+        is_interactive = tag in interactive_tags or role in {
+            "button", "link", "textbox", "checkbox", "radio", "menuitem",
+        }
+        elements[key] = {
+            "uipath": key,
+            "tag": tag,
+            "role": role,
+            "accessible_name": accessible_name,
+            "interactive": is_interactive,
+            "bbox": [
+                int(node.get("x", 0)), int(node.get("y", 0)),
+                int(node.get("width", 0)), int(node.get("height", 0)),
+            ],
+            "visible": bool(node.get("visible", True)),
+            "stability": stability(path).value,
+        }
+        if is_interactive:
+            interactives.append(key)
+        if tag in heading_tags:
+            headings.append(key)
+        if tag in form_tags:
+            forms.append(key)
+
+    return {
+        "url": url,
+        "elements": elements,
+        "interactives": interactives,
+        "headings": headings,
+        "forms": forms,
+    }
 
 
 def _node_view(n: Dict[str, Any]) -> Dict[str, Any]:

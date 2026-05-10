@@ -1,0 +1,16 @@
+{
+  "name": "empty_page",
+  "plugin": "visual",
+  "protocol": "browser",
+  "fixture": {
+    "url": "https://fixture.test/empty",
+    "title": "Empty",
+    "dom_walk": {
+      "html": {}
+    }
+  },
+  "expectations": {
+    "envelopes": ["main.tree"],
+    "observations_must_include": ["page.dom_tree", "page.screen_map", "page.captured"]
+  }
+}

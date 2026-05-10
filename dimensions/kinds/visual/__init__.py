@@ -2,8 +2,6 @@
 
 from dimensions.kinds.visual.injection import (
     BrowserProtocol,
-    ELEMENT_COLUMNS,
-    INTERACTIVE_COLUMNS,
     PageState,
     PlaywrightBrowserProtocol,
     pixel_diff,
@@ -21,8 +19,6 @@ __all__ = [
     "BrowserProtocol",
     "DEFAULT_TIMEOUT_MS",
     "DEFAULT_VIEWPORT",
-    "ELEMENT_COLUMNS",
-    "INTERACTIVE_COLUMNS",
     "PageState",
     "PlaywrightBrowserProtocol",
     "UrlSubject",

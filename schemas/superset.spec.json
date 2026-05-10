@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "fields": {
+    "id":            {"type": "string", "required": true},
+    "label":         {"type": "string", "required": true},
+    "description":   {"type": "string"},
+    "type":          {"type": "string"},
+    "model_version": {"type": "string"},
+    "metadata":      {"type": "object", "fields": {}}
+  }
+}

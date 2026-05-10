@@ -26,10 +26,19 @@ playwright>=1.40
 # against compiled specs. Required at runtime for `spec.conforms` checks.
 jsonschema>=4.20.0
 
-# ── optional ─────────────────────────────────────────────────────────────
-# Used by `dimensions.kinds.visual.pixel_diff` for screenshot pixel-level
-# comparison (lazy-imported — capture works without these; only the diff
-# helper needs them). Keep them in the default install for an out-of-the-
-# box experience; remove if you never compare screenshots.
+# ── screenshot diff ─────────────────────────────────────────────────────
+# Lazy-imported by `dimensions.diff_render`. `pixelmatch` is the same
+# pixel-comparison algorithm Playwright uses internally for
+# `expect(page).to_have_screenshot()` (anti-alias-aware YIQ delta). Pillow
+# provides image loading; numpy is optional (used by the older pixel_diff
+# helper, kept as a fallback).
+pixelmatch>=0.4.0
 Pillow>=10.0
 numpy>=1.24
+
+# ── comments service (Phase B) ──────────────────────────────────────────
+# Optional. Only needed to run `python -m dimensions.comments_server`,
+# which exposes a live read/write API for comments + serves the rendered
+# HTML reports. Reports themselves stay self-contained without these.
+fastapi>=0.110
+uvicorn>=0.27

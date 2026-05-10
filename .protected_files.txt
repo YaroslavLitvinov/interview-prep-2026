@@ -1,3 +1,5 @@
+/workspace/dimensions/dimensions.smart.k.json
+/workspace/dimensions/dimensions.smart.k.md
 /workspace/prep/flagged.k.json
 /workspace/prep/flagged.k.md
 /workspace/prep/superset.k.json

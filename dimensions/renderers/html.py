@@ -15,14 +15,11 @@ Asset handling (defaults to lightweight):
     URLs. Use when the HTML must be a single self-contained file
     (email, archive, off-host viewing).
 
-Big-table handling:
-  * `record_table` payloads (`elements` / `layered` / `interactive`)
-    serialise their rows as JSON inside a ``<script type="application/
-    x-rowdata">`` block. The inline JS reads that JSON, populates the
-    header from `columns`, renders the first 50 rows immediately, and
-    appends additional batches on each click of a "show more" button.
-    HTML stays lean even for 5,000-row element tables; first paint is
-    fast on mobile.
+The visual dimension renders `dom_tree` (visual layout reconstruction
++ inverted ancestor branch view) and `screenshot` (image attachment).
+Both are JS-rendered from a JSON walk that's parent-deduplicated on the
+server, so file size stays in proportion to the page's structural
+complexity.
 """
 
 from __future__ import annotations
@@ -123,12 +120,6 @@ pre{
 .lightbox img{ max-width:100%; max-height:100%; }
 .decisions{ margin-top:1.5rem; padding-top:1rem; border-top:1px solid var(--line); }
 .empty-note{ color:var(--muted); font-style:italic; }
-button.show-more{
-  margin-top:.4rem; padding:.4rem .8rem; font:inherit; cursor:pointer;
-  border:1px solid var(--line); border-radius:.4em;
-  background:var(--card-bg); color:var(--fg);
-}
-button.show-more:hover{ background:var(--code-bg); }
 .dom-tree{ margin-top:.4rem; font:.85rem ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
 .dom-tree details{ margin:.1rem 0; }
 .dom-tree summary{ list-style: revert; padding:.1rem 0; cursor:pointer; }
@@ -146,6 +137,77 @@ button.show-more:hover{ background:var(--code-bg); }
 .dom-ancestor-list li{ padding:.05rem 0; }
 .dom-tree-views > details{ margin:.6rem 0; }
 .dom-tree-views > details > summary{ font-weight:600; padding:.3rem 0; }
+/* ── side-by-side diff renderers ────────────────────────────────── */
+.diff-screenshot, .diff-tree{
+  margin:1rem 0; padding:.6rem; border:1px solid var(--line);
+  border-radius:.5rem;
+}
+.diff-screenshot h2, .diff-tree h2{ font-size:1.05rem; margin:.2rem 0 .4rem; }
+.ss-grid{
+  display:grid; gap:.6rem;
+  grid-template-columns:repeat(3, minmax(0, 1fr));
+  margin-top:.4rem;
+}
+.ss-grid figure{ margin:0; }
+.ss-grid figure img{
+  max-width:100%; height:auto; border:1px solid var(--line);
+  border-radius:.4em; cursor:zoom-in;
+}
+.ss-grid figcaption{ font-size:.8rem; color:var(--muted); margin-bottom:.2rem; }
+@media (max-width:700px){
+  .ss-grid{ grid-template-columns:1fr; }
+}
+.diff-stats{ font-size:.85rem; padding:.3rem 0; }
+.c-unchanged{ color:var(--muted); }
+.c-modified { color:#d97706; font-weight:600; }
+.c-added    { color:var(--pass); font-weight:600; }
+.c-removed  { color:var(--fail); font-weight:600; }
+.diff-filters{ margin:.4rem 0; display:flex; flex-wrap:wrap; gap:.3rem; }
+.diff-filters button{
+  font:inherit; cursor:pointer; padding:.25rem .6rem;
+  border:1px solid var(--line); border-radius:.35em;
+  background:var(--card-bg); color:var(--fg);
+}
+.diff-filters button.active{ background:var(--accent); color:#fff; border-color:var(--accent); }
+.diff-filters button:hover{ background:var(--code-bg); }
+.diff-filters button.active:hover{ background:var(--accent); }
+.diff-leaves-host{ margin-top:.4rem; }
+.diff-leaf{
+  margin:.25rem 0; padding:.35rem .5rem;
+  border:1px solid var(--line); border-left-width:3px;
+  border-radius:.35em; background:var(--card-bg);
+}
+.diff-leaf.s-unchanged{ border-left-color:var(--muted); opacity:.78; }
+.diff-leaf.s-modified { border-left-color:#d97706; }
+.diff-leaf.s-added    { border-left-color:var(--pass); }
+.diff-leaf.s-removed  { border-left-color:var(--fail); }
+.diff-leaf .leaf-head{
+  cursor:pointer; user-select:none; display:flex; gap:.5rem;
+  align-items:baseline; flex-wrap:wrap;
+}
+.diff-leaf .status-badge{
+  font-size:.72rem; font-weight:700; padding:.05em .5em;
+  border-radius:.4em; text-transform:uppercase;
+}
+.diff-leaf.s-unchanged .status-badge{ background:transparent; color:var(--muted); border:1px solid var(--line); }
+.diff-leaf.s-modified  .status-badge{ background:#d97706; color:#fff; }
+.diff-leaf.s-added     .status-badge{ background:var(--pass); color:#fff; }
+.diff-leaf.s-removed   .status-badge{ background:var(--fail); color:#fff; }
+.diff-deltas{ margin:.4rem 0 .2rem; padding-left:1.4rem; font-size:.78rem; }
+.diff-deltas li{ padding:.05rem 0; }
+.diff-delta-key{ color:var(--muted); }
+.diff-delta-val{ font-family:ui-monospace,monospace; word-break:break-all; }
+.diff-delta-arrow{ color:var(--muted); padding:0 .25em; }
+.diff-leaf-body{ margin-top:.3rem; }
+.diff-ancestors{ margin-top:.4rem; padding-top:.3rem; border-top:1px dashed var(--line); }
+.diff-ancestors > .meta{ font-size:.75rem; margin-bottom:.2rem; }
+.diff-ancestor{
+  margin:.2rem 0 .2rem .5rem; padding:.25rem .5rem;
+  border-left:2px solid var(--line); font-size:.85rem;
+}
+.diff-ancestor.s-modified{ border-left-color:#d97706; }
+.diff-ancestor.s-added   { border-left-color:var(--pass); }
+.diff-ancestor.s-removed { border-left-color:var(--fail); }
 .smart-tree-host{ margin-top:.4rem; }
 .smart-tree-wrap{
   border:1px solid var(--line); border-radius:.4em; overflow:auto;
@@ -222,52 +284,6 @@ _JS = """
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') lb.classList.remove('open');
-  });
-})();
-
-// Big-table virtualisation — rows live in <script type="application/x-rowdata">
-// blobs and are pulled into the DOM 50 at a time. HTML stays small even for
-// 5,000-row payloads; first paint is fast on mobile.
-(function(){
-  const PAGE = 50;
-  const ESC = (s) => String(s).replace(/[&<>"']/g,
-    m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-  document.querySelectorAll('table[data-rowdata]').forEach((tbl) => {
-    const dataEl = document.getElementById(tbl.getAttribute('data-rowdata'));
-    if (!dataEl) return;
-    let data;
-    try { data = JSON.parse(dataEl.textContent); } catch (_) { return; }
-    const cols = data.columns || [];
-    const rows = data.rows || [];
-    const tbody = tbl.querySelector('tbody');
-    const wrap = tbl.parentElement;
-    const btn = wrap.querySelector('button.show-more');
-    let shown = 0;
-    function append(n){
-      const frag = document.createDocumentFragment();
-      const end = Math.min(shown + n, rows.length);
-      for (let i = shown; i < end; i++) {
-        const r = rows[i];
-        const tr = document.createElement('tr');
-        const cells = (r && typeof r === 'object' && !Array.isArray(r))
-          ? cols.map(c => r[c] !== undefined ? r[c] : '')
-          : (Array.isArray(r) ? r : [r]);
-        tr.innerHTML = cells.map(c =>
-          `<td>${ESC(String(c).slice(0,200))}</td>`
-        ).join('');
-        frag.appendChild(tr);
-      }
-      tbody.appendChild(frag);
-      shown = end;
-      if (btn) {
-        if (shown >= rows.length) btn.remove();
-        else btn.textContent =
-          'show ' + Math.min(PAGE, rows.length - shown) +
-          ' more (' + (rows.length - shown) + ' remaining)';
-      }
-    }
-    append(PAGE);
-    if (btn) btn.addEventListener('click', () => append(PAGE));
   });
 })();
 
@@ -691,6 +707,174 @@ _JS = """
   });
 })();
 
+// Tree-diff renderer — reads the leaf-diff JSON and materialises a
+// filterable list of leaf cards. Each card shows status + summary +
+// delta list; clicking expands the ancestor chain (also lazily rendered)
+// with each ancestor's own status/deltas. Default filter: "changed"
+// (modified + added + removed); user can switch to "all" / a specific
+// status to navigate the unchanged areas.
+(function(){
+  const ESC = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
+    m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+
+  function nodeSummary(n) {
+    if (!n) return '<span class="meta">(none)</span>';
+    let attrs = '';
+    if (n.id) attrs += '#' + ESC(n.id);
+    if (n.classes && n.classes.length) attrs += '.' + ESC(n.classes.slice(0,3).join('.'));
+    if (n.role) attrs += '[role=' + ESC(n.role) + ']';
+    const text = (n.text || '').trim();
+    const textHtml = text ? ' <span class="meta">"' + ESC(text.slice(0,60)) + '"</span>' : '';
+    return '<code>' + ESC(n.tag || '?') + attrs + '</code>' + textHtml;
+  }
+
+  function deltaRow(delta) {
+    return '<li>'
+      + '<span class="diff-delta-key">' + ESC(delta.path) + ':</span> '
+      + '<span class="diff-delta-val">' + ESC(JSON.stringify(delta.before)) + '</span>'
+      + '<span class="diff-delta-arrow"> → </span>'
+      + '<span class="diff-delta-val">' + ESC(JSON.stringify(delta.after)) + '</span>'
+      + '</li>';
+  }
+
+  function deltaList(deltas) {
+    if (!deltas || !deltas.length) return '';
+    return '<ul class="diff-deltas">' + deltas.map(deltaRow).join('') + '</ul>';
+  }
+
+  function buildLeafCard(leaf, nodes) {
+    // Resolve the leaf's diff record from the dedup table.
+    const rec = nodes[leaf.key] || {};
+    const status = rec.status || 'unchanged';
+    const node = rec.current || rec.baseline || {};
+    const deltas = rec.deltas || [];
+    const card = document.createElement('div');
+    card.className = 'diff-leaf s-' + status;
+    card.dataset.status = status;
+
+    const head = document.createElement('div');
+    head.className = 'leaf-head';
+    head.innerHTML =
+      '<span class="status-badge">' + ESC(statusLabel(status)) + '</span>' +
+      nodeSummary(node) +
+      (status === 'modified' && deltas.length
+        ? ' <span class="meta">— ' + deltas.length + ' delta' +
+          (deltas.length > 1 ? 's' : '') + '</span>'
+        : '');
+    card.appendChild(head);
+
+    if (status === 'modified' && deltas.length) {
+      const dd = document.createElement('div');
+      dd.innerHTML = deltaList(deltas);
+      card.appendChild(dd);
+    }
+
+    const body = document.createElement('div');
+    body.className = 'diff-leaf-body';
+    body.style.display = 'none';
+    card.appendChild(body);
+
+    let loaded = false;
+    head.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = body.style.display !== 'none';
+      if (open) {
+        body.style.display = 'none';
+      } else {
+        if (!loaded) {
+          body.appendChild(buildAncestors(leaf, nodes));
+          loaded = true;
+        }
+        body.style.display = '';
+      }
+    });
+    return card;
+  }
+
+  function statusLabel(s) {
+    return ({unchanged:'=', modified:'Δ', added:'+', removed:'−'})[s] || s;
+  }
+
+  function buildAncestors(leaf, nodes) {
+    const wrap = document.createElement('div');
+    wrap.className = 'diff-ancestors';
+    const keys = leaf.ancestors || [];
+    if (!keys.length) {
+      wrap.innerHTML = '<div class="meta">(no ancestors)</div>';
+      return wrap;
+    }
+    wrap.innerHTML = '<div class="meta">Ancestors innermost → root</div>';
+    keys.forEach(k => {
+      const a = nodes[k] || {};
+      const node = a.current || a.baseline || {};
+      const aDeltas = a.deltas || [];
+      const aStatus = a.status || 'unchanged';
+      const div = document.createElement('div');
+      div.className = 'diff-ancestor s-' + aStatus;
+      div.innerHTML =
+        '<span class="status-badge">' + ESC(statusLabel(aStatus)) + '</span> ' +
+        nodeSummary(node) +
+        (aStatus === 'modified' && aDeltas.length
+          ? ' <span class="meta">— ' + aDeltas.length + ' delta' +
+            (aDeltas.length > 1 ? 's' : '') + '</span>'
+          : '');
+      if (aStatus === 'modified' && aDeltas.length) {
+        const ul = document.createElement('div');
+        ul.innerHTML = deltaList(aDeltas);
+        div.appendChild(ul);
+      }
+      wrap.appendChild(div);
+    });
+    return wrap;
+  }
+
+  function renderTreeDiff(host, data, filtersEl) {
+    const leaves = data.leaves || [];
+    const nodes  = data.nodes || {};
+    if (!leaves.length) {
+      host.innerHTML = '<div class="empty-note">no leaves to diff</div>';
+      return;
+    }
+    host.innerHTML = '';
+    const frag = document.createDocumentFragment();
+    leaves.forEach(l => frag.appendChild(buildLeafCard(l, nodes)));
+    host.appendChild(frag);
+
+    function applyFilter(filter) {
+      host.querySelectorAll('.diff-leaf').forEach(card => {
+        const s = card.dataset.status;
+        let visible;
+        if (filter === 'all')          visible = true;
+        else if (filter === 'changed') visible = (s !== 'unchanged');
+        else                            visible = (s === filter);
+        card.style.display = visible ? '' : 'none';
+      });
+    }
+    if (filtersEl) {
+      filtersEl.querySelectorAll('button[data-filter]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          filtersEl.querySelectorAll('button.active').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          applyFilter(btn.getAttribute('data-filter'));
+        });
+      });
+    }
+    applyFilter('changed');
+  }
+
+  document.querySelectorAll('script[type="application/x-treediff"]').forEach((scr) => {
+    const host = document.getElementById(scr.getAttribute('data-target'));
+    if (!host) return;
+    let data;
+    try { data = JSON.parse(scr.textContent); }
+    catch (_) { host.innerHTML = '<div class="empty-note">parse error</div>'; return; }
+    // Filter buttons are siblings of the host inside .diff-tree.
+    const section = host.closest('.diff-tree');
+    const filters = section ? section.querySelector('.diff-filters') : null;
+    renderTreeDiff(host, data, filters);
+  });
+})();
+
 // Table filter — instant, case-insensitive, per-table. Hides rows that
 // are already in the DOM (so it works after virtualised rows are loaded).
 (function(){
@@ -709,14 +893,229 @@ _JS = """
 """
 
 
+_COMMENTS_CSS = """
+.comments-thread{ margin:.5rem 0 0; padding:.4rem 0 0; border-top:1px dashed #cbd5e1; }
+.comments-thread:empty{ display:none; }
+.comment-item{ margin:.3rem 0; padding:.3rem .5rem; border-left:3px solid #94a3b8;
+               background:#f8fafc; border-radius:.2rem; font-size:.85rem; }
+.comment-item.resolution{ border-left-color:#0ea5e9; }
+.comment-item.resolution[data-resolution="approved"]{ border-left-color:#16a34a; }
+.comment-item.resolution[data-resolution="denied"]{ border-left-color:#dc2626; }
+.comment-meta{ color:#64748b; font-size:.75rem; }
+.comment-text{ white-space:pre-wrap; }
+.report-comments{ margin:1rem 0; }
+.report-comments h3{ font-size:1rem; margin:0 0 .4rem; }
+.comment-form{ margin:.4rem 0; display:flex; flex-direction:column; gap:.25rem; }
+.comment-form-row{ display:flex; gap:.3rem; flex-wrap:wrap; }
+.comment-form input, .comment-form select, .comment-form textarea{
+  font:inherit; padding:.2rem .35rem; border:1px solid #cbd5e1; border-radius:.2rem;
+}
+.comment-form textarea{ width:100%; }
+.comment-form button{ align-self:flex-start; padding:.25rem .8rem; cursor:pointer;
+  border:1px solid #2563eb; background:#2563eb; color:#fff; border-radius:.2rem; }
+.comment-form button:hover{ background:#1d4ed8; }
+"""
+
+
+_COMMENTS_JS = r"""
+(function(){
+  const scr = document.getElementById('dimensions-comments');
+  if (!scr) return;
+  let island = {};
+  try { island = JSON.parse(scr.textContent || '{}'); } catch (e) {}
+  const identity = island.identity || {};
+  let comments  = Array.isArray(island.comments) ? island.comments : [];
+
+  const ESC = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
+    m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+
+  // Live mode: an /api/health endpoint answers. Either same-origin (http
+  // served by the comments server) or an explicit `api_base` baked in
+  // at render time. file:// without api_base stays offline.
+  const apiBase = (identity.api_base || '').replace(/\/+$/, '');
+  const isHttp  = /^https?:$/.test(location.protocol);
+  const canTryLive = !!apiBase || isHttp;
+  let liveMode = false;
+  let labels   = [];   // for diff pages, both sides are queried
+  if (identity.kind === 'diff') {
+    labels = (identity.labels || []).slice();
+  } else if (identity.label) {
+    labels = [identity.label];
+  }
+
+  function apiUrl(path) {
+    return apiBase ? (apiBase + path) : path;
+  }
+
+  function renderEntry(c) {
+    const isRes = c.type === 'resolution';
+    const cls = isRes ? 'comment-item resolution' : 'comment-item';
+    const resAttr = isRes ? ' data-resolution="' + ESC(c.resolution) + '"' : '';
+    const date = c.date ? new Date(c.date).toLocaleString() : '';
+    const tag = isRes
+      ? '<span class="badge ' + (c.resolution === 'approved' ? 'pass' : 'fail') +
+        '">' + ESC(c.resolution) + '</span> '
+      : '';
+    return '<div class="' + cls + '"' + resAttr + '>' +
+      '<div class="comment-meta">' + tag +
+        '<strong>' + ESC(c.author || 'anonymous') + '</strong> &middot; ' +
+        '<time>' + ESC(date) + '</time></div>' +
+      '<div class="comment-text">' + ESC(c.text || '') + '</div>' +
+    '</div>';
+  }
+
+  function paint() {
+    const byEntity = {};
+    const reportLevel = [];
+    comments.forEach(c => {
+      if (c.parent_entity_id) {
+        (byEntity[c.parent_entity_id] = byEntity[c.parent_entity_id] || []).push(c);
+      } else {
+        reportLevel.push(c);
+      }
+    });
+    document.querySelectorAll('[data-thread-for]').forEach(el => {
+      const eid = el.getAttribute('data-thread-for');
+      const list = byEntity[eid] || [];
+      el.innerHTML = list.map(renderEntry).join('');
+      if (liveMode) ensurePostForm(el, eid);
+    });
+    paintReportLevel(reportLevel);
+  }
+
+  function paintReportLevel(reportLevel) {
+    let box = document.querySelector('section.report-comments');
+    if (!box) {
+      const main = document.querySelector('main');
+      if (!main) return;
+      box = document.createElement('section');
+      box.className = 'report-comments';
+      main.insertBefore(box, main.firstChild);
+    }
+    box.innerHTML = '<h3>Report comments</h3>' +
+      reportLevel.map(renderEntry).join('') +
+      (liveMode ? postFormHtml(null) : '');
+    if (liveMode) wireForm(box, null);
+  }
+
+  function postFormHtml(entityId) {
+    const labelOpts = labels.length > 1
+      ? '<select name="label" required>' +
+          labels.map(l => '<option value="' + ESC(l) + '">' + ESC(l) + '</option>').join('') +
+        '</select>'
+      : '<input type="hidden" name="label" value="' + ESC(labels[0] || '') + '">';
+    return (
+      '<form class="comment-form" data-entity="' + ESC(entityId || '') + '">' +
+        '<div class="comment-form-row">' +
+          '<input type="text" name="author" placeholder="author" value="' +
+            ESC(localStorage.getItem('dim.comment.author') || '') + '">' +
+          labelOpts +
+          '<select name="kind">' +
+            '<option value="comment">comment</option>' +
+            '<option value="approved">approve</option>' +
+            '<option value="denied">deny</option>' +
+          '</select>' +
+        '</div>' +
+        '<textarea name="text" rows="2" placeholder="add comment…" required></textarea>' +
+        '<button type="submit">post</button>' +
+      '</form>'
+    );
+  }
+
+  function ensurePostForm(threadEl, entityId) {
+    if (threadEl.querySelector('form.comment-form')) return;
+    threadEl.insertAdjacentHTML('beforeend', postFormHtml(entityId));
+    wireForm(threadEl, entityId);
+  }
+
+  function wireForm(host, entityId) {
+    const form = host.querySelector('form.comment-form');
+    if (!form || form.dataset.wired) return;
+    form.dataset.wired = '1';
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const author = (fd.get('author') || '').toString().trim() || 'anonymous';
+      const text   = (fd.get('text') || '').toString().trim();
+      const label  = (fd.get('label') || '').toString();
+      const kind   = (fd.get('kind') || 'comment').toString();
+      if (!text) return;
+      localStorage.setItem('dim.comment.author', author);
+
+      const body = {
+        dim:           identity.dimension,
+        label:         label,
+        envelope_name: identity.envelope_name,
+        parent_entity_id: entityId || null,
+        author, text,
+      };
+      const url  = kind === 'comment' ? '/api/comments' : '/api/resolutions';
+      if (kind !== 'comment') body.resolution = kind;
+      try {
+        const resp = await fetch(apiUrl(url), {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        await refresh();
+      } catch (err) {
+        alert('post failed: ' + err.message);
+      }
+    });
+  }
+
+  async function refresh() {
+    if (!liveMode) return;
+    const seen = new Set();
+    const merged = [];
+    for (const lbl of labels) {
+      try {
+        const r = await fetch(apiUrl(
+          '/api/comments?dim=' + encodeURIComponent(identity.dimension) +
+          '&label=' + encodeURIComponent(lbl)));
+        if (!r.ok) continue;
+        const arr = await r.json();
+        for (const c of arr) {
+          if (seen.has(c.id)) continue;
+          seen.add(c.id);
+          merged.push(c);
+        }
+      } catch (_) { /* ignore */ }
+    }
+    comments = merged;
+    paint();
+  }
+
+  async function detectLive() {
+    if (!canTryLive || !identity.dimension || !labels.length) return false;
+    try {
+      const r = await fetch(apiUrl('/api/health'), {cache: 'no-store'});
+      if (!r.ok) return false;
+      const j = await r.json();
+      return !!j.ok;
+    } catch (_) { return false; }
+  }
+
+  // The post form is shown whenever live mode is *possible* (apiBase
+  // is set or we're served over http). The health check still runs to
+  // pull a fresh comment list, but its failure no longer hides the
+  // form — instead, posting will surface the error to the user.
+  liveMode = canTryLive && !!identity.dimension && labels.length > 0;
+  paint();
+  if (liveMode) {
+    detectLive().then(ok => { if (ok) refresh(); });
+  }
+})();
+"""
+
+
 # ── renderer ───────────────────────────────────────────────────────────────
 
 
 class HtmlRenderer:
     """`ReportNode` tree → self-contained HTML document."""
 
-    HTML_PREVIEW_LINES = 200
-    TABLE_DATA_CAP     = 1500   # max rows shipped in the JSON blob; HTML stays small
     INLINE_SET_LIMIT   = 12
     DISTRIB_TOP        = 30
     HISTOGRAM_TOP      = 30
@@ -728,27 +1127,44 @@ class HtmlRenderer:
         asset_loader: Optional[Callable[[str], bytes]] = None,
         inline_assets: bool = False,
         title: Optional[str] = None,
+        comments: Optional[List[Dict[str, Any]]] = None,
+        report_identity: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.asset_loader = asset_loader
         self.inline_assets = inline_assets
         self.title = title
+        self.comments: List[Dict[str, Any]] = list(comments or [])
+        # report_identity = {"dimension": ..., "label": ..., "envelope_name": ..., ["labels": [...]] }
+        # `labels` is set on diff pages where two labels feed the report.
+        self.report_identity: Dict[str, Any] = dict(report_identity or {})
 
     # ── public entry ─────────────────────────────────────────────────
 
     def render(self, node: ReportNode) -> str:
+        import json as _json
         body = "\n".join(self._render(node))
         page_title = self.title or self._default_title(node)
+        island = {
+            "identity": self.report_identity,
+            "comments": self.comments,
+        }
+        comments_blob = _json.dumps(
+            island, ensure_ascii=False, default=str,
+        ).replace("</", "<\\/")
         return (
             "<!doctype html>\n"
             '<html lang="en"><head>'
             '<meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
             f"<title>{esc(page_title)}</title>"
-            f"<style>{_CSS}</style>"
+            f"<style>{_CSS}{_COMMENTS_CSS}</style>"
             "</head><body><main>"
             f"{body}"
             "</main>"
+            f'<script id="dimensions-comments" '
+            f'type="application/x-dimensions-comments">{comments_blob}</script>'
             f"<script>{_JS}</script>"
+            f"<script>{_COMMENTS_JS}</script>"
             "</body></html>"
         )
 
@@ -832,6 +1248,7 @@ class HtmlRenderer:
             f"<div class=\"label\">{esc(d['label'])}</div>"
             f"<div class=\"body\"><code>{esc(str(d['value']))}</code>{unit}</div>",
             required=node.required,
+            entity_id=d.get("entity_id"),
         )
 
     def render_status_line(self, node: ReportNode) -> str:
@@ -843,6 +1260,7 @@ class HtmlRenderer:
             f'<span class="badge {cls}">{text}</span>'
             f"<span class=\"label\">{esc(d['label'])}</span>",
             required=node.required,
+            entity_id=d.get("entity_id"),
         )
 
     def render_rule_result(self, node: ReportNode) -> str:
@@ -862,7 +1280,7 @@ class HtmlRenderer:
             if sample:
                 items = "".join(f"<li>{esc(str(v))}</li>" for v in sample)
                 body += f'<ul class="violations">{items}</ul>'
-        return self._obs_card(d.get("id"), body, required=node.required)
+        return self._obs_card(d.get("id"), body, required=node.required, entity_id=d.get("entity_id"))
 
     def render_set_summary(self, node: ReportNode) -> str:
         d = node.data
@@ -885,7 +1303,7 @@ class HtmlRenderer:
                 f"<details><summary>show all</summary>"
                 f'<div class="set-items">{full}</div></details>'
             )
-        return self._obs_card(d.get("id"), head + body, required=node.required)
+        return self._obs_card(d.get("id"), head + body, required=node.required, entity_id=d.get("entity_id"))
 
     def render_distribution_table(self, node: ReportNode) -> str:
         d = node.data
@@ -917,81 +1335,125 @@ class HtmlRenderer:
             required=node.required,
         )
 
-    # ── payload renderers ────────────────────────────────────────────
+    # ── side-by-side diff renderers ──────────────────────────────────
 
-    def render_html_excerpt(self, node: ReportNode) -> str:
+    def render_comparison_envelope(self, node: ReportNode) -> str:
         d = node.data
-        html_lines = (d.get("html") or "").splitlines()
-        preview = html_lines[: self.HTML_PREVIEW_LINES]
-        truncated = len(html_lines) > self.HTML_PREVIEW_LINES
-        body = (
-            f"<div class=\"label\">{esc(d['label'])} "
-            f'<span class="meta">payload <code>html</code></span></div>'
-            '<div class="body">'
-            f'<div class="kv"><span class="k">URL</span> <span class="v"><code>{esc(d.get("url") or "")}</code></span></div>'
-            f'<div class="kv"><span class="k">Status</span> <span class="v"><code>{esc(str(d.get("status") or ""))}</code></span></div>'
-            f'<div class="kv"><span class="k">Length</span> <span class="v">{d.get("length", 0)} chars</span></div>'
-            "<details><summary>show source</summary>"
-            f"<pre><code>{esc(chr(10).join(preview))}{'…' if truncated else ''}</code></pre>"
-            "</details>"
-            "</div>"
+        head = (
+            f"<header>"
+            f"<h1>Diff · <code>{esc(d.get('dimension'))}</code> / "
+            f"<code>{esc(d.get('envelope_name'))}</code></h1>"
+            f"<div class='meta'>baseline "
+            f"<code>{esc(d.get('baseline_label') or '?')}</code> "
+            f"({esc(d.get('baseline_captured') or '')}) → "
+            f"current <code>{esc(d.get('current_label') or '?')}</code> "
+            f"({esc(d.get('current_captured') or '')})</div>"
+            f"</header>"
         )
-        return self._obs_card(d.get("id"), body, required=node.required)
+        children_parts: List[str] = []
+        for c in node.children:
+            children_parts.extend(self._render(c))
+        return f"<article class='envelope'>{head}{''.join(children_parts)}</article>"
 
-    def render_record_table(self, node: ReportNode) -> str:
-        """Render rows lazily — emit JSON in a <script>; JS virtualises."""
+    def render_screenshot_diff(self, node: ReportNode) -> str:
+        d = node.data
+        baseline_ref = d.get("baseline_ref") or ""
+        current_ref  = d.get("current_ref") or ""
+        diff_ref     = d.get("diff_ref") or ""
+        meta = d.get("metrics") or {}
+        if not meta.get("available"):
+            note = (
+                f"<div class='meta'>Pixel diff unavailable: "
+                f"{esc(meta.get('reason') or '?')}</div>"
+            )
+        else:
+            bbox = meta.get("bbox")
+            bbox_str = (
+                f"@{bbox[0]},{bbox[1]} {bbox[2]-bbox[0]}×{bbox[3]-bbox[1]}"
+                if bbox else "(no diff)"
+            )
+            mismatch_note = ""
+            if meta.get("size_mismatch"):
+                mismatch_note = (
+                    f" · <span class='meta'>size mismatch — baseline "
+                    f"{esc(meta.get('size_before'))} vs current "
+                    f"{esc(meta.get('size_after'))}; padded to union for diff</span>"
+                )
+            note = (
+                f"<div class='meta'>"
+                f"<strong>{meta.get('percent_changed', 0)}%</strong> pixels changed "
+                f"({meta.get('diff_pixels', 0):,}/{meta.get('total_pixels', 0):,}) · "
+                f"bbox <code>{esc(bbox_str)}</code>{mismatch_note}"
+                f"</div>"
+            )
+        # `class="screenshot"` makes the existing lightbox JS pick the
+        # images up — tap any panel to open it fullscreen.
+        return (
+            "<section class='diff-screenshot'>"
+            "<h2>Screenshot</h2>"
+            f"{note}"
+            "<div class='ss-grid'>"
+            f"<figure class='screenshot'>"
+            f"<figcaption>baseline (tap to enlarge)</figcaption>"
+            f"<img src='{esc(baseline_ref)}' alt='baseline' loading='lazy'></figure>"
+            f"<figure class='screenshot'>"
+            f"<figcaption>current (tap to enlarge)</figcaption>"
+            f"<img src='{esc(current_ref)}' alt='current' loading='lazy'></figure>"
+            + (
+                f"<figure class='screenshot'>"
+                f"<figcaption>diff — red = changed (tap to enlarge)</figcaption>"
+                f"<img src='{esc(diff_ref)}' alt='diff' loading='lazy'></figure>"
+                if diff_ref else ""
+            )
+            + "</div></section>"
+        )
+
+    def render_tree_diff(self, node: ReportNode) -> str:
+        """Grouped + filterable per-leaf diff with click-to-expand ancestor diffs.
+
+        Ships the diff data as JSON in a <script>; the inline JS renders
+        leaves into the page, applies filters, and lazily renders ancestor
+        chains on click. Avoids HTML duplication of node data.
+        """
         import json as _json
         d = node.data
-        cols = list(d.get("columns", []))
-        all_rows = list(d.get("rows", []))
-        # Cap the rows shipped in the JSON blob so the HTML stays small even
-        # for large payloads (full envelope still on disk for whoever needs it).
-        rows = all_rows[: self.TABLE_DATA_CAP]
-        truncated = max(0, len(all_rows) - self.TABLE_DATA_CAP)
-        obs_id = d.get("id") or ""
-        # IDs scoped per observation so multiple tables coexist on one page.
-        slug = _slug(obs_id) or "tbl"
-        table_id = f"tbl-{slug}"
-        data_id = f"rd-{slug}"
+        stats   = d.get("stats")  or {}
+        leaves  = d.get("leaves") or []
+        nodes_t = d.get("nodes")  or {}
+        slug = _slug(d.get("envelope_name") or "tree") + "-diff"
+        host_id = f"tree-diff-host-{slug}"
+        data_id = f"tree-diff-data-{slug}"
 
-        truncate_note = (
-            f"<div class=\"meta\">… {truncated:,} more rows omitted from this "
-            f"report (full data in the snapshot envelope)</div>"
-            if truncated else ""
-        )
-        title = (
-            f"{esc(d['label'])} "
-            f"<span class=\"meta\">payload <code>{esc(d['schema'])}</code> "
-            f"— {len(all_rows):,} rows × {len(cols)} columns</span>"
-        )
-        thead = "".join(f"<th>{esc(c)}</th>" for c in cols)
-        # JSON is embedded as a non-executing script type; safe even with
-        # values that look like HTML, because the browser doesn't parse
-        # the contents as HTML or JS.
-        json_blob = _json.dumps(
-            {"columns": cols, "rows": rows}, ensure_ascii=False, default=str,
-        )
-        # `</` closes any enclosing <script> in some legacy parsers; escape it.
-        json_blob = json_blob.replace("</", "<\\/")
+        blob = _json.dumps(
+            {"leaves": leaves, "nodes": nodes_t},
+            ensure_ascii=False, default=str,
+        ).replace("</", "<\\/")
 
-        body = (
-            f'<div class="label">{title}</div>'
-            f'<div class="body">'
-            f'<input class="filter" type="search" placeholder="filter rows…" '
-            f'data-target="#{table_id} table">'
-            f'<div id="{table_id}" class="table-wrap">'
-            f"<table data-rowdata=\"{data_id}\">"
-            f"<thead><tr>{thead}</tr></thead>"
-            f"<tbody></tbody>"
-            f"</table>"
-            f'<button class="show-more" data-target="{table_id}" type="button">'
-            f"show more</button>"
-            f"{truncate_note}"
+        return (
+            "<section class='diff-tree'>"
+            "<h2>Tree</h2>"
+            f"<div class='diff-stats meta'>"
+            f"{stats.get('total', 0):,} leaves · "
+            f"<span class='c-unchanged'>{stats.get('unchanged', 0):,}</span> unchanged · "
+            f"<span class='c-modified'>{stats.get('modified', 0):,}</span> modified · "
+            f"<span class='c-added'>{stats.get('added', 0):,}</span> added · "
+            f"<span class='c-removed'>{stats.get('removed', 0):,}</span> removed"
             f"</div>"
-            f'<script id="{data_id}" type="application/x-rowdata">{json_blob}</script>'
-            f"</div>"
+            "<div class='diff-filters' role='group' aria-label='Filter by status'>"
+            "<button data-filter='changed' class='active' type='button'>Changed</button>"
+            "<button data-filter='all' type='button'>All</button>"
+            "<button data-filter='modified' type='button'>Modified</button>"
+            "<button data-filter='added' type='button'>Added</button>"
+            "<button data-filter='removed' type='button'>Removed</button>"
+            "<button data-filter='unchanged' type='button'>Unchanged</button>"
+            "</div>"
+            f"<div id='{host_id}' class='diff-leaves-host'>"
+            "<noscript>JavaScript required to render the tree diff.</noscript>"
+            "</div>"
+            f"<script id='{data_id}' type='application/x-treediff' "
+            f"data-target='{host_id}'>{blob}</script>"
+            "</section>"
         )
-        return self._obs_card(obs_id, body, required=node.required)
 
     def render_image(self, node: ReportNode) -> str:
         d = node.data
@@ -1015,19 +1477,7 @@ class HtmlRenderer:
                 "</figure>"
             )
         body += "</div>"
-        return self._obs_card(d.get("id"), body, required=node.required)
-
-    def render_accessibility(self, node: ReportNode) -> str:
-        d = node.data
-        raw = d.get("raw") or {}
-        body = (
-            f"<div class=\"label\">{esc(d['label'])} "
-            f'<span class="meta">payload <code>accessibility_tree</code></span></div>'
-            '<details><summary>show tree</summary>'
-            f"<pre><code>{esc(_json_dump(raw))}</code></pre>"
-            "</details>"
-        )
-        return self._obs_card(d.get("id"), body, required=node.required)
+        return self._obs_card(d.get("id"), body, required=node.required, entity_id=d.get("entity_id"))
 
     # ── dom_tree (single JSON + JS-rendered, no duplicates) ────────────
 
@@ -1145,7 +1595,10 @@ class HtmlRenderer:
             f"{skipped_html}"
             f"</div>"
         )
-        return self._obs_card(obs_id, body, required=node.required)
+        return self._obs_card(
+            obs_id, body, required=node.required,
+            entity_id=node.data.get("entity_id"),
+        )
 
     def render_unknown_payload(self, node: ReportNode) -> str:
         d = node.data
@@ -1155,6 +1608,7 @@ class HtmlRenderer:
             f'<span class="meta">payload <code>{esc(d["payload_schema"])}</code></span></div>'
             f'<div class="body empty-note">data type: {esc(d.get("data_type", "?"))}</div>',
             required=node.required,
+            entity_id=d.get("entity_id"),
         )
 
     def render_unknown_obs(self, node: ReportNode) -> str:
@@ -1272,41 +1726,6 @@ class HtmlRenderer:
         raw = d.get("raw") or {}
         head = f"payload <code>{esc(schema)}</code> changed"
 
-        if schema in {"elements", "layered", "interactive"}:
-            bits = []
-            for key, label in (("added", "Added"), ("removed", "Removed")):
-                items = raw.get(key) or []
-                if items:
-                    sel_list = "".join(
-                        f"<li><code>{esc(r.get('selector', '') if isinstance(r, dict) else str(r))}</code></li>"
-                        for r in items[:10]
-                    )
-                    bits.append(
-                        f"<strong>{label}:</strong> {len(items)} row(s)"
-                        f"<ul class='violations'>{sel_list}</ul>"
-                    )
-            modified = raw.get("modified") or {}
-            if modified:
-                sel_list = "".join(
-                    f"<li><code>{esc(sel)}</code></li>"
-                    for sel in list(modified.keys())[:10]
-                )
-                bits.append(
-                    f"<strong>Modified:</strong> {len(modified)} row(s)"
-                    f"<ul class='violations'>{sel_list}</ul>"
-                )
-            return self._diff_card(d["id"], schema, head, extras=bits)
-
-        if schema == "html":
-            bits = [
-                f"length: <code>{esc(str(raw.get('length_before')))}</code> → "
-                f"<code>{esc(str(raw.get('length_after')))}</code> chars",
-                f"status: <code>{esc(str(raw.get('status_before')))}</code> → "
-                f"<code>{esc(str(raw.get('status_after')))}</code>",
-                f"first diff offset: <code>{esc(str(raw.get('first_diff_offset')))}</code>",
-            ]
-            return self._diff_card(d["id"], "html", head, extras=bits)
-
         if schema == "screenshot":
             bits = [
                 f"sha256: <code>{esc((raw.get('sha256_before') or '')[:12])}</code> → "
@@ -1343,7 +1762,12 @@ class HtmlRenderer:
         return out
 
     def _obs_card(
-        self, obs_id: Optional[str], inner_html: str, *, required: bool = False
+        self,
+        obs_id: Optional[str],
+        inner_html: str,
+        *,
+        required: bool = False,
+        entity_id: Optional[str] = None,
     ) -> str:
         oid_attr = f' id="obs-{esc(obs_id)}"' if obs_id else ""
         oid_link = (
@@ -1354,7 +1778,16 @@ class HtmlRenderer:
             ' <span class="badge fail" title="required">required</span>'
             if required else ""
         )
-        return f'<div class="observation"{oid_attr}>{inner_html}{oid_link}{req}</div>'
+        eid_attr = f' data-entity-id="{esc(entity_id)}"' if entity_id else ""
+        thread = (
+            f'<div class="comments-thread" data-thread-for="{esc(entity_id)}"></div>'
+            if entity_id else ""
+        )
+        return (
+            f'<div class="observation"{oid_attr}{eid_attr}>'
+            f'{inner_html}{oid_link}{req}{thread}'
+            f'</div>'
+        )
 
     def _diff_card(
         self,

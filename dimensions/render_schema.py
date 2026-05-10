@@ -15,8 +15,7 @@ Override hooks (every method below):
     render_set / render_distribution / render_histogram / render_payload
 
     render_payload(obs) -> ReportNode                 # per-payload-schema dispatch
-    render_payload_html / render_payload_table /
-    render_payload_screenshot / render_payload_accessibility /
+    render_payload_screenshot / render_payload_dom_tree /
     render_payload_unknown
 
     render_change(obs_id, change) -> ReportNode       # per-kind dispatch
@@ -75,6 +74,50 @@ class BaseRenderSchema:
             ],
         )
 
+    # ── per-envelope diff (side-by-side rendering) ────────────────────────
+
+    def render_envelope_diff(
+        self,
+        baseline: Dict[str, Any],
+        current:  Dict[str, Any],
+        *,
+        screenshot_diff_assets: Optional[Dict[str, Any]] = None,
+        tree_diff_data:         Optional[Dict[str, Any]] = None,
+    ) -> ReportNode:
+        """Build a side-by-side comparison node for ONE envelope.
+
+        ``screenshot_diff_assets`` (passed in by the CLI when it has access
+        to both labels' assets + the pixelmatch overlay) populates the
+        screenshot_diff child. ``tree_diff_data`` populates the tree_diff
+        child. Either may be None when the envelope doesn't carry the
+        corresponding payload.
+        """
+        children: list = []
+        if screenshot_diff_assets is not None:
+            children.append(ReportNode(
+                type="screenshot_diff",
+                data=dict(screenshot_diff_assets),
+            ))
+        if tree_diff_data is not None:
+            children.append(ReportNode(
+                type="tree_diff",
+                data=dict(tree_diff_data),
+            ))
+        return ReportNode(
+            type="comparison_envelope",
+            data={
+                "dimension":     baseline.get("dimension") or current.get("dimension"),
+                "envelope_name": (
+                    baseline.get("envelope_name") or current.get("envelope_name")
+                ),
+                "baseline_label": baseline.get("label"),
+                "current_label":  current.get("label"),
+                "baseline_captured": baseline.get("captured_at"),
+                "current_captured":  current.get("captured_at"),
+            },
+            children=children,
+        )
+
     # ── per-kind observation dispatch ─────────────────────────────────
 
     def render_observation(self, obs: Dict[str, Any]) -> ReportNode:
@@ -83,6 +126,12 @@ class BaseRenderSchema:
         node = method(obs) if method else self._render_unknown_obs(obs)
         if obs.get("required"):
             node.required = True
+        # Carry the framework-stamped entity_id into the IR so renderers
+        # can attach it as a data-attribute and comment threads can
+        # anchor to it.
+        eid = obs.get("entity_id")
+        if eid and isinstance(node.data, dict) and "entity_id" not in node.data:
+            node.data["entity_id"] = eid
         return node
 
     def render_scalar(self, obs: Dict[str, Any]) -> ReportNode:
@@ -143,38 +192,11 @@ class BaseRenderSchema:
     def render_payload(self, obs: Dict[str, Any]) -> ReportNode:
         schema = obs.get("payload_schema", "?")
         method_map = {
-            "html":               self.render_payload_html,
-            "elements":           self.render_payload_table,
-            "layered":            self.render_payload_table,
-            "interactive":        self.render_payload_table,
-            "screenshot":         self.render_payload_screenshot,
-            "accessibility_tree": self.render_payload_accessibility,
-            "dom_tree":           self.render_payload_dom_tree,
+            "screenshot": self.render_payload_screenshot,
+            "dom_tree":   self.render_payload_dom_tree,
         }
         method = method_map.get(schema, self.render_payload_unknown)
         return method(obs)
-
-    def render_payload_html(self, obs: Dict[str, Any]) -> ReportNode:
-        data = obs.get("data") or {}
-        html = data.get("html") or ""
-        return ReportNode(type="html_excerpt", data={
-            "id":     obs.get("id", ""),
-            "label":  obs.get("label", ""),
-            "url":    data.get("url"),
-            "status": data.get("status"),
-            "length": len(html),
-            "html":   html,
-        })
-
-    def render_payload_table(self, obs: Dict[str, Any]) -> ReportNode:
-        data = obs.get("data") or {}
-        return ReportNode(type="record_table", data={
-            "id":      obs.get("id", ""),
-            "label":   obs.get("label", ""),
-            "schema":  obs.get("payload_schema", "?"),
-            "columns": list(data.get("columns") or []),
-            "rows":    list(data.get("rows") or []),
-        })
 
     def render_payload_screenshot(self, obs: Dict[str, Any]) -> ReportNode:
         data = obs.get("data") or {}
@@ -197,15 +219,6 @@ class BaseRenderSchema:
                 asset_ref=dict(data),
             ))
         return node
-
-    def render_payload_accessibility(self, obs: Dict[str, Any]) -> ReportNode:
-        data = obs.get("data") or {}
-        return ReportNode(type="accessibility", data={
-            "id":     obs.get("id", ""),
-            "label":  obs.get("label", ""),
-            "format": data.get("format"),
-            "raw":    data,
-        })
 
     def render_payload_dom_tree(self, obs: Dict[str, Any]) -> ReportNode:
         data = obs.get("data") or {}

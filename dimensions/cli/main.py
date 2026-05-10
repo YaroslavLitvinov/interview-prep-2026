@@ -42,6 +42,7 @@ from dimensions.render import (
     render_comparison_markdown,
     render_envelope_markdown,
 )
+from dimensions.diff_render import compute_screenshot_diff, compute_tree_diff
 from dimensions.render_schema import BaseRenderSchema
 from dimensions.renderers import HtmlRenderer
 from dimensions.schema.envelope import EnvelopeAdapter
@@ -62,6 +63,7 @@ _DIM_COMMANDS = {
     "diff",
     "render-html",
     "render-md",
+    "render-diff",
 }
 
 _GLOBAL_COMMANDS: set[str] = set()  # reserved for future non-dim ops, none today
@@ -86,6 +88,43 @@ def _targets(dims: Dimensions, scoped_dim: Optional[str]) -> List[str]:
     if scoped_dim:
         return [scoped_dim]
     return dims.list_known()
+
+
+def _no_label_message(
+    dims: Dimensions,
+    scoped_dim: Optional[str],
+    label: str,
+    *,
+    action_verb: str = "render",
+) -> List[str]:
+    """Build a user-friendly explanation when a label has no envelopes."""
+    targets = _targets(dims, scoped_dim)
+    available: List[str] = sorted({
+        lbl for d in targets for lbl in dims.list_labels(d)
+    })
+    scope_token = scoped_dim or "all"
+    out = [
+        f"No snapshot found for label `{label}` "
+        f"(dimension scope: `{scope_token}`).",
+        "",
+    ]
+    if available:
+        out.append(
+            "Available labels: " + ", ".join(f"`{lbl}`" for lbl in available)
+        )
+        out.append(
+            f"  Try: `python3 -m dimensions {scope_token} {action_verb} "
+            f"{available[0]}`"
+        )
+    else:
+        out.append(
+            f"No snapshots have been captured yet. "
+            f"Capture one first:"
+        )
+    out.append(
+        f"  Capture: `python3 -m dimensions {scope_token} capture {label}`"
+    )
+    return out
 
 
 # ── commands ───────────────────────────────────────────────────────────────
@@ -272,10 +311,203 @@ def cmd_render_md(args: argparse.Namespace) -> int:
             )
 
     if not written:
-        _print(f"_No envelopes for label `{args.label}`._")
+        for line in _no_label_message(
+            dims, args.dim, args.label, action_verb="render-md",
+        ):
+            _print(line)
         return 1
     _print(f"✓ wrote {written} markdown file(s) → {Path(args.out)}")
     return 0
+
+
+def cmd_render_diff(args: argparse.Namespace) -> int:
+    """Emit per-envelope side-by-side diff reports between two labels.
+
+    Output (default ``--out dimensions-reports``):
+        <out>/<dim>/<baseline>.vs.<current>/
+            <env>.diff.html
+            assets/<sha>.png    ← baseline + current screenshots + pixelmatch overlays
+            index.html
+    """
+    import shutil
+    import hashlib
+    import json as _json
+
+    dims = _build_dims(Path(args.config))
+    targets = _targets(dims, args.dim)
+    out = Path(args.out)
+    schema = BaseRenderSchema()
+    written = 0
+
+    for dim_name in targets:
+        if not (
+            dims.exists(dim_name, args.baseline)
+            and dims.exists(dim_name, args.current)
+        ):
+            continue
+
+        out_dir = out / dim_name / f"{args.baseline}.vs.{args.current}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        assets_dst = out_dir / "assets"
+        assets_dst.mkdir(exist_ok=True)
+
+        b_envs = set(dims.list_envelopes(dim_name, args.baseline))
+        c_envs = set(dims.list_envelopes(dim_name, args.current))
+        common = sorted(b_envs & c_envs)
+
+        index_links: List[str] = []
+        for env_name in common:
+            try:
+                b_env = dims.load(dim_name, args.baseline, env_name)
+                c_env = dims.load(dim_name, args.current, env_name)
+            except SnapshotValidationError as e:
+                print(f"✗ {dim_name}/{env_name}: {e}", file=sys.stderr)
+                continue
+            # Tag each envelope with its label for the renderer.
+            b_env["label"] = args.baseline
+            c_env["label"] = args.current
+
+            screenshot_assets, tree_data = _compute_envelope_diff(
+                dims, dim_name, args.baseline, args.current, env_name,
+                b_env, c_env, assets_dst,
+            )
+            if screenshot_assets is None and tree_data is None:
+                continue   # nothing diffable in this envelope
+
+            ir = schema.render_envelope_diff(
+                b_env, c_env,
+                screenshot_diff_assets=screenshot_assets,
+                tree_diff_data=tree_data,
+            )
+            # Comments anchored to either side's snapshot apply to the diff
+            # report. Merge sidecars from both labels so reviewers see the
+            # full thread on the comparison page.
+            from dimensions.comments import load_comments as _load_c
+            diff_comments: List[Dict[str, Any]] = []
+            for lbl in (args.baseline, args.current):
+                try:
+                    entries = _load_c(dims.backend._label_dir(dim_name, lbl))
+                    diff_comments.extend(
+                        e.model_dump(mode="json") for e in entries
+                    )
+                except Exception:
+                    pass
+            html = HtmlRenderer(
+                title=f"diff · {dim_name} / {env_name} · "
+                      f"{args.baseline} → {args.current}",
+                comments=diff_comments,
+                report_identity={
+                    "dimension":     dim_name,
+                    "envelope_name": env_name,
+                    "labels":        [args.baseline, args.current],
+                    "kind":          "diff",
+                    "api_base":      getattr(args, "api_base", None),
+                },
+            ).render(ir)
+            (out_dir / f"{env_name}.diff.html").write_text(html)
+            index_links.append(
+                f'<li><a href="{env_name}.diff.html">{env_name}</a></li>'
+            )
+            written += 1
+
+        if index_links:
+            (out_dir / "index.html").write_text(
+                "<!doctype html><html lang=en><head><meta charset=utf-8>"
+                "<meta name=viewport content='width=device-width,initial-scale=1'>"
+                f"<title>{dim_name} · {args.baseline} → {args.current}</title>"
+                "<style>body{font:16px/1.5 sans-serif;max-width:600px;"
+                "margin:2rem auto;padding:1rem}a{color:#2563eb}</style>"
+                f"</head><body><h1>{dim_name} · diff</h1>"
+                f"<p>{args.baseline} → {args.current}</p>"
+                f"<ul>{''.join(index_links)}</ul></body></html>"
+            )
+
+    if not written:
+        for line in _no_label_message(
+            dims, args.dim, args.baseline, action_verb="render-diff",
+        ):
+            _print(line)
+        return 1
+    _print(f"✓ wrote {written} diff file(s) → {Path(args.out)}")
+    return 0
+
+
+def _compute_envelope_diff(
+    dims: Dimensions,
+    dim_name: str,
+    baseline_label: str,
+    current_label: str,
+    env_name: str,
+    b_env: Dict[str, Any],
+    c_env: Dict[str, Any],
+    assets_dst: Path,
+):
+    """Compute screenshot- and tree-diff data for one envelope.
+
+    Copies referenced screenshot assets into ``assets_dst`` and writes the
+    pixelmatch overlay there. Returns (screenshot_diff_assets, tree_data),
+    either may be None when the envelope doesn't carry that payload.
+    """
+    import hashlib
+    import shutil
+
+    def _payloads(env, schema):
+        return [
+            o for o in env.get("observations", [])
+            if o.get("kind") == "payload" and o.get("payload_schema") == schema
+        ]
+
+    screenshot_assets = None
+    b_shots = _payloads(b_env, "screenshot")
+    c_shots = _payloads(c_env, "screenshot")
+    if b_shots and c_shots:
+        b_data = b_shots[0].get("data") or {}
+        c_data = c_shots[0].get("data") or {}
+        b_sha = b_data.get("sha256")
+        c_sha = c_data.get("sha256")
+        baseline_ref = current_ref = None
+        diff_ref = None
+        metrics: Dict[str, Any] = {"available": False}
+        if b_sha and c_sha:
+            try:
+                b_bytes = dims.read_asset(dim_name, baseline_label, b_sha)
+                c_bytes = dims.read_asset(dim_name, current_label, c_sha)
+            except Exception:
+                b_bytes = c_bytes = None
+            if b_bytes and c_bytes:
+                # Copy baseline + current images into the report's asset dir
+                # using a label-prefixed sha so they don't collide.
+                b_name = f"{baseline_label}-{b_sha}{Path(b_data.get('ref','')).suffix or '.png'}"
+                c_name = f"{current_label}-{c_sha}{Path(c_data.get('ref','')).suffix or '.png'}"
+                (assets_dst / b_name).write_bytes(b_bytes)
+                (assets_dst / c_name).write_bytes(c_bytes)
+                baseline_ref = f"assets/{b_name}"
+                current_ref = f"assets/{c_name}"
+                metrics = compute_screenshot_diff(b_bytes, c_bytes)
+                diff_bytes = metrics.pop("diff_image_bytes", None)
+                if diff_bytes:
+                    diff_sha = hashlib.sha256(diff_bytes).hexdigest()[:16]
+                    diff_name = f"diff-{baseline_label}-{current_label}-{diff_sha}.png"
+                    (assets_dst / diff_name).write_bytes(diff_bytes)
+                    diff_ref = f"assets/{diff_name}"
+        screenshot_assets = {
+            "baseline_ref": baseline_ref,
+            "current_ref":  current_ref,
+            "diff_ref":     diff_ref,
+            "metrics":      metrics,
+        }
+
+    tree_data = None
+    b_trees = _payloads(b_env, "dom_tree")
+    c_trees = _payloads(c_env, "dom_tree")
+    if b_trees and c_trees:
+        tree_data = compute_tree_diff(
+            b_trees[0].get("data") or {},
+            c_trees[0].get("data") or {},
+        )
+        tree_data["envelope_name"] = env_name
+
+    return screenshot_assets, tree_data
 
 
 def cmd_render_html(args: argparse.Namespace) -> int:
@@ -316,6 +548,14 @@ def cmd_render_html(args: argparse.Namespace) -> int:
             (lambda sha, _d=name, _l=args.label: dims.read_asset(_d, _l, sha))
             if args.inline_assets else None
         )
+        from dimensions.comments import load_comments as _load_c
+        try:
+            label_comments = [
+                e.model_dump(mode="json")
+                for e in _load_c(dims.backend._label_dir(name, args.label))
+            ]
+        except Exception:
+            label_comments = []
         index_links: List[str] = []
         for env_name in env_names:
             try:
@@ -328,6 +568,14 @@ def cmd_render_html(args: argparse.Namespace) -> int:
                 asset_loader=loader,
                 inline_assets=args.inline_assets,
                 title=f"{name} / {args.label} / {env_name}",
+                comments=label_comments,
+                report_identity={
+                    "dimension":     name,
+                    "label":         args.label,
+                    "envelope_name": env_name,
+                    "kind":          "snapshot",
+                    "api_base":      getattr(args, "api_base", None),
+                },
             ).render(ir)
             (out_dir / f"{env_name}.html").write_text(html)
             index_links.append(f'<li><a href="{env_name}.html">{env_name}</a></li>')
@@ -345,7 +593,10 @@ def cmd_render_html(args: argparse.Namespace) -> int:
             )
 
     if not written:
-        _print(f"_No envelopes for label `{args.label}`._")
+        for line in _no_label_message(
+            dims, args.dim, args.label, action_verb="render-html",
+        ):
+            _print(line)
         return 1
     _print(f"✓ wrote {written} HTML file(s) → {Path(args.out)}")
     return 0
@@ -499,6 +750,27 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    p_render_diff = sub.add_parser(
+        "render-diff",
+        help="Side-by-side diff report between two labels (HTML, per envelope)",
+    )
+    p_render_diff.add_argument("baseline")
+    p_render_diff.add_argument("current")
+    p_render_diff.add_argument(
+        "--out",
+        default="dimensions-reports",
+        help="Output directory (default: %(default)s)",
+    )
+    p_render_diff.add_argument(
+        "--api-base", default=None,
+        help=(
+            "Absolute base URL for the comments API (e.g. "
+            "http://localhost:8765). Default: same-origin — works when "
+            "the report is served by `dimensions.comments_server` on "
+            "whatever host:port you ran it under."
+        ),
+    )
+
     p_html = sub.add_parser(
         "render-html",
         help="Emit lightweight, mobile-first HTML report(s) for a label",
@@ -518,8 +790,94 @@ def build_parser() -> argparse.ArgumentParser:
             "the assets directory next to the rendered HTML so refs resolve)."
         ),
     )
+    p_html.add_argument(
+        "--api-base", default=None,
+        help=(
+            "Absolute base URL for the comments API (e.g. "
+            "http://localhost:8765). Default: same-origin."
+        ),
+    )
+
+    p_comment = sub.add_parser(
+        "comment",
+        help="Add / resolve / list comments on a snapshot label",
+    )
+    p_comment.add_argument(
+        "comment_action", choices=("add", "resolve", "list"),
+    )
+    p_comment.add_argument("label")
+    p_comment.add_argument(
+        "--envelope", default="main",
+        help="Envelope name the comment targets (default: main)",
+    )
+    p_comment.add_argument(
+        "--entity-id", default=None,
+        help=(
+            "entity_id of the observation being commented on. Omit to "
+            "comment on the report itself."
+        ),
+    )
+    p_comment.add_argument(
+        "--author", default="anonymous",
+        help="Author name for the comment (default: anonymous)",
+    )
+    p_comment.add_argument(
+        "--text", default="",
+        help="Comment body (required for add/resolve)",
+    )
+    p_comment.add_argument(
+        "--resolution", choices=("approved", "denied"),
+        help="For action=resolve only — approval decision",
+    )
 
     return parser
+
+
+def cmd_comment(args: argparse.Namespace) -> int:
+    """Append a comment or resolution to a label's sidecar JSON."""
+    from dimensions.comments import (
+        Comment, Resolution, append_entry, load_comments,
+        make_document_id, new_comment_id, now_utc,
+    )
+
+    dims = _build_dims(Path(args.config))
+    backend = dims.backend
+    targets = _targets(dims, args.dim)
+    if not targets:
+        print("error: no dimensions match", file=sys.stderr)
+        return 1
+    dim_name = targets[0]
+    if not dims.exists(dim_name, args.label):
+        print(f"error: snapshot {dim_name}/{args.label} not found",
+              file=sys.stderr)
+        return 1
+
+    label_dir = backend._label_dir(dim_name, args.label)
+
+    if args.comment_action == "list":
+        for e in load_comments(label_dir):
+            extra = f" [{e.resolution}]" if hasattr(e, "resolution") else ""
+            target = e.parent_entity_id or "(report)"
+            print(f"{e.date.isoformat()} {e.author} {e.type}{extra} → "
+                  f"{e.parent_document_id} :: {target}\n  {e.text}")
+        return 0
+
+    parent_doc = make_document_id(dim_name, args.label, args.envelope)
+    common = dict(
+        id=new_comment_id(),
+        parent_document_id=parent_doc,
+        parent_entity_id=args.entity_id,
+        date=now_utc(),
+        author=args.author,
+        text=args.text,
+    )
+    if args.comment_action == "resolve":
+        entry = Resolution(**common, resolution=args.resolution)
+    else:
+        entry = Comment(**common)
+    path = append_entry(label_dir, entry)
+    _print(f"✓ {args.comment_action} → {path}")
+    return 0
 
 
 _DISPATCH = {
@@ -533,6 +891,8 @@ _DISPATCH = {
     "diff": cmd_diff,
     "render-html": cmd_render_html,
     "render-md": cmd_render_md,
+    "render-diff": cmd_render_diff,
+    "comment": cmd_comment,
 }
 
 

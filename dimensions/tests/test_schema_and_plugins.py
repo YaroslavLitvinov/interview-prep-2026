@@ -121,15 +121,6 @@ async def test_visual_plugin_emits_two_envelopes_per_url():
         available=True, loaded=True, status=200,
         url="http://fake/", title="Hello",
         viewport={"width": 1280, "height": 720},
-        html="<html><body><h1>Hello</h1><img src='a.png'/></body></html>",
-        elements=[
-            {"tag": "html", "selector": "html", "attributes": {}, "text": ""},
-            {"tag": "body", "selector": "body", "attributes": {}, "text": ""},
-            {"tag": "h1",   "selector": "h1",   "attributes": {}, "text": "Hello"},
-            {"tag": "img",  "selector": "img",  "attributes": {"src": "a.png"}, "text": ""},
-        ],
-        layered=[],
-        interactive=[],
         dom_walk=[
             {"idx": 0, "parent": -1, "kept": True, "tag": "html",
              "id": "", "classes": [], "attributes": {}, "text": "",
@@ -162,16 +153,8 @@ async def test_visual_plugin_emits_two_envelopes_per_url():
     by_name = _by_name(result["visual"])
     assert set(by_name) == {"home.tree", "home.screenshot"}
 
-    # Tree envelope: page status + a11y rule check + dom_tree payload.
+    # Tree envelope: dom_tree payload.
     tree = _by_id(by_name["home.tree"])
-    assert tree["browser.available"]["value"] is True
-    assert tree["page.loaded"]["value"] is True
-    assert tree["page.status_code"]["value"] == 200
-    assert tree["page.title"]["value"] == "Hello"
-    # img missing alt → rule check fails (we have one such img in dom_walk).
-    # The fake's elements list (used elsewhere) doesn't drive the check; the
-    # walk does. The fake walk above doesn't include the img, so check passes.
-    assert tree["a11y.images_have_alt"]["passed"] is True
     assert tree["page.dom_tree"]["payload_schema"] == "dom_tree"
     assert tree["page.dom_tree"]["data"]["root"]["tag"] == "html"
 

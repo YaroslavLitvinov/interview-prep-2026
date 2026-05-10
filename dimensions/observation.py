@@ -143,10 +143,10 @@ def payload(
 ) -> Dict[str, Any]:
     """A free-form structured observation.
 
-    `payload_schema` names the shape of `data` (e.g. ``html``, ``elements``,
-    ``layered``, ``interactive``, ``accessibility_tree``, ``screenshot``,
-    ``comparison``). The framework dispatches diff and render on this
-    discriminator. Unknown values fall back to a generic JSON dump.
+    `payload_schema` names the shape of `data` (e.g. ``dom_tree``,
+    ``screenshot``, ``comparison``). The framework dispatches diff and
+    render on this discriminator. Unknown values fall back to a generic
+    JSON dump.
 
     `data` is opaque to the framework — any JSON-serializable shape is
     valid. This is the kind to use when the existing fixed-shape kinds

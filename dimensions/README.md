@@ -35,29 +35,41 @@ If `playwright install-deps` is unavailable in your environment (locked-down CI,
 Create `dimensions.config.yaml` at your project root:
 
 ```yaml
+schemas_dir: schemas/                # auto-discover <name>.spec.json → registered as <name>
+
 plugins:
   - name: data
-    module: plugins.data            # importable Python module
+    module: plugins.data
     class: DataPlugin
     config:
-      source: prep/superset.k.json  # path relative to project root
+      sources:
+        superset: {path: prep/superset.k.json, spec: superset}
+        # or shorthand for a path-only entry:
+        # users: data/users.json
 
   - name: visual
     module: plugins.visual
     class: VisualPlugin
     config:
-      url: http://localhost:8501
+      urls:
+        home:             http://localhost:8501
+        empty-search:     "http://localhost:8501/?s=non+existing"
+        non-empty-search: "http://localhost:8501/?s=LLM"
       viewport: { width: 1280, height: 720 }
-      timeout_ms: 5000
+      timeout_ms: 15000
+      wait_until: networkidle          # commit | domcontentloaded | load | networkidle
+      wait_after_load_ms: 500          # extra grace for late paints / animations
+      # filter: ['div', 'button']      # optional CSS selectors for the dom_tree envelope
+      # with_hierarchy: false          # default false — collapsed tree
 
 backend:
   type: filesystem
-  path: .dimensions/snapshots       # operational artifacts (gitignore this)
+  path: .dimensions/snapshots          # operational artifacts (gitignore this)
 
-reports_dir: dimensions-reports/    # curated reports (commit these)
+reports_dir: dimensions-reports/       # curated reports (commit these)
 ```
 
-The framework reads this file from the working directory on every CLI invocation. Use `--config <path>` to point elsewhere.
+`sources` and `urls` accept either a dict keyed by name (above) or a list of explicit `{name, ...}` entries — pick whichever reads cleaner. The framework reads this file from the working directory on every CLI invocation; use `--config <path>` to point elsewhere.
 
 ### 3. CLI
 
@@ -79,18 +91,22 @@ python3 -m dimensions data inspect
 python3 -m dimensions all capture baseline      # every applicable dimension
 python3 -m dimensions data capture solo         # just one
 
-# Render a saved snapshot as markdown
-python3 -m dimensions data show baseline
-python3 -m dimensions all report baseline
+# Render a saved snapshot
+python3 -m dimensions data show baseline                # to stdout (markdown)
+python3 -m dimensions all render-md   baseline          # one .md per envelope, assets/ alongside
+python3 -m dimensions all render-html baseline          # one .html per envelope (mobile-first)
+#   add --inline-assets to embed image bytes (single self-contained file each)
 
 # What labels exist on disk?
 python3 -m dimensions all list-snapshots
-python3 -m dimensions data list-snapshots
 
-# Compare two labels — markdown diff per dimension
+# Compare two labels
 python3 -m dimensions all capture current
-python3 -m dimensions all diff baseline current
-python3 -m dimensions data diff baseline current
+python3 -m dimensions all diff baseline current         # markdown summary to stdout
+python3 -m dimensions all render-diff baseline current  # full side-by-side HTML report
+#   tree-diff: leaves with status (unchanged/modified/added/removed) + per-property
+#              deltas + click-to-expand ancestor chain. Default filter: changed.
+#   screenshot-diff: baseline / current / pixelmatch overlay (red = changed pixels)
 
 # Print the generated JSON Schema (for non-Python plugin authors)
 python3 -m dimensions data schema               # just the data envelope
@@ -104,38 +120,51 @@ validation failure or any plugin error.
 
 ### 4. Write a plugin
 
-A plugin is a subclass of `dimensions.api.Plugin`. It owns one thing: how to walk its source and emit observations. A `Dimension` wraps the plugin and is what the framework's `Dimensions` registry interacts with — the plugin never deals with persistence, diff, or rendering.
+A plugin is a subclass of `dimensions.api.Plugin`. It owns one thing: how to walk its source(s) and emit observations. A `Dimension` wraps the plugin and is what the framework's `Dimensions` registry interacts with — the plugin never deals with persistence, diff, or rendering.
 
-Minimal Data plugin (the one shipped at `plugins/data.py`):
+Plugin `collect()` is `async` and may emit one envelope or many. Each envelope is named so it persists as a separate file under `<dim>/<label>/<name>.snap.json`.
+
+Minimal multi-source Data plugin (the one shipped at `plugins/data.py`):
 
 ```python
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
 from dimensions.api import CollectionContext, Plugin
-from dimensions.kinds.data import file_subject_dict, walk_json
+from dimensions.kinds.data import (
+    JsonFileProtocol, compile_spec, file_subject_dict, walk_json,
+)
 
 
 class DataPlugin(Plugin):
     name = "data"
     category = "data"
-    description = "Walks a JSON data file and reports its structural properties."
 
-    def __init__(self, source: str, spec: Optional[str] = None, **extra: Any) -> None:
-        super().__init__(source=source, spec=spec, **extra)
-        self.source = Path(source)
-        self.spec = Path(spec) if spec else None
+    def __init__(
+        self,
+        sources: List[Dict[str, Any]],
+        *,
+        file_protocol: Optional[JsonFileProtocol] = None,
+        schemas: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(sources=sources)
+        self.sources = sources                       # [{name, path, spec?}, ...]
+        self.file_protocol = file_protocol or JsonFileProtocol()
+        self.schemas = schemas or {}                 # framework auto-injects from registry
 
     def is_applicable(self) -> bool:
-        return self.source.exists()
+        return any(Path(s["path"]).exists() for s in self.sources)
 
-    def collect(self, ctx: CollectionContext) -> None:
-        with ctx.envelope(subject=file_subject_dict(self.source)) as env:
-            walk_json(env, self.source)
-            # ... optional spec-conformance observations
+    async def collect(self, ctx: CollectionContext) -> None:
+        async with self.file_protocol as fp:
+            for src in self.sources:
+                path = Path(src["path"])
+                with ctx.envelope(name=src["name"], subject=file_subject_dict(path)) as env:
+                    walk_json(env, path)
+                    # … optional spec-conformance check using self.schemas[src["spec"]]
 ```
 
-Plugins evaluate their own paths (relative paths resolve against cwd). Per-dimension primitives live under `dimensions.kinds.<dim>` (`data`, `visual`); the visual plugin additionally takes an injectable `BrowserInjectionProtocol` so tests can swap in a fake without launching Chromium.
+Plugins evaluate their own paths (relative paths resolve against cwd). Per-dimension primitives live under `dimensions.kinds.<dim>` (`data`, `visual`); the visual plugin additionally takes an injectable `BrowserProtocol` (default `PlaywrightBrowserProtocol`) so tests can swap in a fake without launching Chromium.
 
 To build a custom observation set, use the builders from `dimensions.observation`:
 
@@ -170,14 +199,27 @@ After a couple of `capture` calls the working tree looks like:
 ```
 .dimensions/snapshots/
 ├── data/
-│   ├── baseline.snap.json    # validated envelope, atomic-write
-│   └── current.snap.json
+│   ├── baseline/
+│   │   └── superset.snap.json       # one envelope per (label, source)
+│   └── current/
+│       └── superset.snap.json
 └── visual/
-    ├── baseline.snap.json
-    └── current.snap.json
+    ├── baseline/
+    │   ├── home.tree.snap.json      # structural — DOM tree + stats + a11y check
+    │   ├── home.screenshot.snap.json
+    │   ├── empty-search.tree.snap.json
+    │   ├── empty-search.screenshot.snap.json
+    │   └── assets/
+    │       └── <sha256>.png         # content-addressed, deduped
+    └── current/
+        └── …
 ```
 
-These files are operational and regenerable — gitignore them. Anything you want to keep (a published comparison) lives in `dimensions-reports/`.
+Each capture writes one `.snap.json` per emitted envelope. Visual emits two
+per URL — `<url>.tree` (page metadata + the full hierarchical
+`dom_tree` payload) and `<url>.screenshot` (PNG asset, content-addressed).
+These files are operational and regenerable — gitignore them. Curated reports
+live in `dimensions-reports/`.
 
 ## Core concepts
 
@@ -195,7 +237,7 @@ A typed, atomic unit of measurement. Every plugin emits a list of observations. 
 | `histogram` | `{top_n: [...], total, unique}` | A frequency table (top-N preserved) |
 | `payload` | `{payload_schema, data}` | Arbitrary structured data (full DOM, per-element layout, screenshots, accessibility trees, …) — `payload_schema` discriminates render/diff |
 
-The six fixed-shape kinds cover most counters/booleans/inventories. `payload` carries anything richer the others can't express; the framework dispatches diff and render on its `payload_schema` field. Recognised payload schemas today: `html`, `elements`, `layered`, `interactive`, `accessibility_tree`, `screenshot`.
+The six fixed-shape kinds cover most counters/booleans/inventories. `payload` carries anything richer the others can't express; the framework dispatches diff and render on its `payload_schema` field. Recognised payload schemas today: `dom_tree` (hierarchical DOM with per-element styles + layout + role) and `screenshot` (PNG asset reference). New schemas can be added without touching the IR — only the renderer dispatch grows.
 
 ### Envelope
 
@@ -251,10 +293,9 @@ A small adapter that collects data for one dimension and pushes it to the framew
 |---|---|
 | **Schema** | Authored as Pydantic models; auto-generated JSON Schema (Draft 2020-12) for cross-language validation |
 | **Persistence** | Pluggable backends (filesystem default; in-memory, SQLite, Postgres, S3 future) |
-| **Diff** | Kind-aware semantic comparison between two envelopes |
-| **Render** | Text, markdown, Allure (planned) |
-| **Validation** | Schema validation at write time, load time, and via CLI for the whole corpus |
-| **Decoders** | Built-in adapters that convert binary or non-JSON artifacts into diffable JSON |
+| **Diff** | Kind-aware semantic comparison between two envelopes; payload-schema-aware (per-element tree diff, pixelmatch screenshot overlay) |
+| **Render** | Markdown, mobile-first HTML (with smart-tree visual reconstruction + JS-rendered DOM tree), and side-by-side diff reports |
+| **Validation** | Schema validation at write time and load time |
 | **CLI** | Single entry point: `python3 -m dimensions <DIMENSION\|all> <command>` |
 
 ### The plugin owns
@@ -283,9 +324,10 @@ Anything beyond that lives in a layer above.
 
 ## The plugin authoring contract
 
-Plugins push data through `CollectionContext`. They never open files for output, never serialize JSON, never touch the storage backend. Filesystem, HTTP, and process work are the plugin's job — use stdlib (`pathlib`, `json`, `urllib`, `subprocess`) or accept an injectable `BaseInjectionProtocol` subclass for anything that benefits from being mockable.
+Plugins push data through `CollectionContext`. They never open files for output, never serialize JSON, never touch the storage backend. Filesystem, HTTP, and process work are the plugin's job — use stdlib (`pathlib`, `json`, `urllib`, `subprocess`) or accept an injectable `BaseInjectionProtocol` subclass for anything that benefits from being mockable. `collect()` is async, can yield to other plugins via `await`, and may open more than one envelope per call.
 
 ```python
+import asyncio
 import json
 from pathlib import Path
 
@@ -297,34 +339,38 @@ class MyDataPlugin(Plugin):
     category = "data"
     description = "Verifies the integrity of a JSON data file."
 
-    def __init__(self, source: str, **extra) -> None:
-        super().__init__(source=source, **extra)
-        self.source = Path(source)
+    def __init__(self, sources, **extra) -> None:
+        super().__init__(sources=sources, **extra)
+        self.sources = sources           # [{name, path}, …]
 
     def is_applicable(self) -> bool:
-        return self.source.exists()
+        return any(Path(s["path"]).exists() for s in self.sources)
 
-    def collect(self, ctx: CollectionContext) -> None:
-        with ctx.envelope(
-            subject={"kind": "file", "path": str(self.source)},
-        ) as env:
-            data = json.loads(self.source.read_text())
-
-            env.scalar(
-                "counts.total_records", "Total records", len(data["records"])
-            )
-            env.rule_check(
-                "schema.required_fields",
-                "All records have required fields",
-                passed=all("id" in r for r in data["records"]),
-                violations=[
-                    {"index": i}
-                    for i, r in enumerate(data["records"])
-                    if "id" not in r
-                ],
-                checked_count=len(data["records"]),
-            )
-        # On context exit, framework validates and persists.
+    async def collect(self, ctx: CollectionContext) -> None:
+        for src in self.sources:
+            path = Path(src["path"])
+            with ctx.envelope(
+                name=src["name"],
+                subject={"kind": "file", "path": str(path)},
+            ) as env:
+                data = json.loads(path.read_text())
+                env.scalar(
+                    "counts.total_records", "Total records", len(data["records"])
+                )
+                env.rule_check(
+                    "schema.required_fields",
+                    "All records have required fields",
+                    passed=all("id" in r for r in data["records"]),
+                    violations=[
+                        {"index": i}
+                        for i, r in enumerate(data["records"])
+                        if "id" not in r
+                    ],
+                    checked_count=len(data["records"]),
+                )
+            # On context exit, framework validates and persists this envelope.
+            # Open another envelope here for the next source — emit as many
+            # as the plugin needs.
 ```
 
 A plugin **never**:
@@ -344,10 +390,11 @@ A plugin **only**:
 
 | Primitive | Purpose |
 |---|---|
-| `ctx.envelope(*, subject, dimension=None)` | Begin a snapshot envelope (context manager) |
+| `ctx.envelope(*, name, subject, dimension=None)` | Open one named envelope (context manager) — call as many times as the plugin needs envelopes |
 | `env.scalar / .boolean / .rule_check / .set / .distribution / .histogram / .payload` | Observation builders |
+| `env.attach_asset(content, mime_type, …)` | Stage a binary blob for content-addressed storage; returns metadata (sha256/ref/size_bytes) the plugin embeds in a `payload` observation |
 
-Injectable dependencies (browser drivers, HTTP clients, SQL sessions, etc.) inherit from `dimensions.injection.BaseInjectionProtocol` — context-manager lifecycle, `name` attribute, `open`/`close`. The visual plugin's `BrowserInjectionProtocol` (and its default `PlaywrightInjectionProtocol`) is the reference example.
+Injectable dependencies (browser drivers, file readers, HTTP clients, SQL sessions, etc.) inherit from `dimensions.injection.BaseInjectionProtocol` — async lifecycle (`open`/`close` + `async with`), `name` attribute, default `compare()` hook. The visual plugin's `BrowserProtocol` (default `PlaywrightBrowserProtocol`) and the data plugin's `JsonFileProtocol` are the reference examples.
 
 ## Storage backends
 
@@ -380,11 +427,16 @@ Every command takes a leading scope token: `all` (every applicable dimension) or
 | `<scope> list` | List registered dimensions (filtered if scoped) | No |
 | `<scope> list-snapshots` | Saved labels (filtered if scoped) | No |
 | `<scope> schema` | JSON Schema for the scoped envelope(s) | No |
-| `<scope> inspect` | Live capture + render to markdown (no save) | No |
+| `<scope> inspect` | Live capture + render to stdout (no save) | No |
 | `<scope> capture <label>` | Capture and persist a snapshot under a label | Yes |
-| `<scope> show <label>` | Render a saved snapshot as markdown | No |
+| `<scope> show <label>` | Render a saved snapshot as markdown to stdout | No |
 | `<scope> report <label>` | Full markdown report for a label | No |
-| `<scope> diff <a> <b>` | Render markdown comparison between two snapshots | No |
+| `<scope> render-md <label>` | One markdown file per envelope; assets/ copied alongside | No |
+| `<scope> render-html <label>` | One mobile-first HTML file per envelope; visual envelopes get the smart-tree reconstruction + JSON-driven DOM tree view | No |
+| `<scope> diff <a> <b>` | Markdown comparison between two snapshots (summary) | No |
+| `<scope> render-diff <a> <b>` | Side-by-side HTML diff per envelope: tree-diff (status/deltas/ancestors) + screenshot-diff (pixelmatch overlay) | No |
+
+`render-html` and `render-md` accept `--inline-assets` to embed image bytes inline (single self-contained file per envelope). `--out <dir>` overrides the default `dimensions-reports/` location.
 
 Planned commands as the corpus grows:
 
@@ -410,14 +462,15 @@ The CLI reads `dimensions.config.yaml` from the working directory (or `--config 
 Schemas are authored as Pydantic models and compiled to JSON Schema for cross-language consumers.
 
 ```
-framework/schema/
-├── observation.py            # Pydantic source — observation kinds
-├── envelope.py               # Pydantic source — base envelope and per-category variants
-├── snapshot.py               # Pydantic source — full snapshot
+dimensions/schema/
+├── observation.py            # Pydantic source — observation kinds (the 7 + payload)
+├── envelope.py               # Pydantic source — base envelope; per-kind variants live
+│                             #   under dimensions/kinds/<dim>/schema.py
 └── _generated/               # auto-generated; never hand-edited
     ├── observation.schema.json
-    ├── envelope.schema.json
-    └── snapshot.schema.json
+    ├── envelope.schema.json          # union over every dimension (oneOf $refs)
+    ├── data.envelope.schema.json     # data-only variant
+    └── visual.envelope.schema.json   # visual-only variant
 ```
 
 The framework's build step generates JSON Schema (Draft 2020-12) from the Pydantic models. Plugin authors — including those in non-Python languages — validate against the generated JSON Schema; framework maintainers edit the Pydantic source.
@@ -486,10 +539,17 @@ The generated JSON Schema for the union envelope `$ref`s the per-dimension files
 │   ├── store/                         # storage backends (internal)
 │   │   ├── base.py
 │   │   └── filesystem.py
+│   ├── diff_render.py                  # tree diff + pixelmatch screenshot diff
+│   ├── render_ir.py                    # ReportNode IR
+│   ├── render_schema.py                # BaseRenderSchema (envelope/diff → IR)
+│   ├── renderers/
+│   │   ├── markdown.py                 # IR → markdown
+│   │   └── html.py                     # IR → mobile-first HTML (smart-tree, diff)
 │   ├── kinds/                         # per-dimension primitives & schema
-│   │   ├── data/                       # FileSubject, walk_json, spec compiler
-│   │   └── visual/                     # UrlSubject, BrowserInjectionProtocol,
-│   │                                   #   PlaywrightInjectionProtocol, primitives
+│   │   ├── data/                       # FileSubject, walk_json, spec compiler,
+│   │   │                                #   JsonFileProtocol
+│   │   └── visual/                     # UrlSubject, BrowserProtocol,
+│   │                                   #   PlaywrightBrowserProtocol, primitives
 │   ├── schema/                        # Pydantic models + generated JSON Schemas
 │   │   ├── envelope.py
 │   │   ├── observation.py
@@ -500,7 +560,7 @@ The generated JSON Schema for the union envelope `$ref`s the per-dimension files
 ├── plugins/                          # PROJECT PLUGINS
 │   ├── __init__.py
 │   ├── data.py                        # DataPlugin
-│   └── visual.py                      # VisualPlugin (uses BrowserInjectionProtocol)
+│   └── visual.py                      # VisualPlugin (uses BrowserProtocol)
 │
 ├── dimensions.config.yaml            # binds project to framework
 ├── .dimensions/                      # operational artifacts (gitignored)
@@ -533,21 +593,30 @@ Curated documents (`.k.json` family) are mutated only via JSON Patch and auto-re
 The project's binding to the framework. Single source of plugin registration and backend selection.
 
 ```yaml
+schemas_dir: schemas/                      # auto-discover <name>.spec.json → registered as <name>
+
 plugins:
   - name: data
     module: plugins.data
     class: DataPlugin
     config:
-      source: prep/superset.k.json
-      spec:   prep/superset.spec.json     # optional
+      sources:
+        superset: {path: prep/superset.k.json, spec: superset}
 
   - name: visual
     module: plugins.visual
     class: VisualPlugin
     config:
-      url: http://localhost:8501
+      urls:
+        home:             http://localhost:8501
+        empty-search:     "http://localhost:8501/?s=non+existing"
+        non-empty-search: "http://localhost:8501/?s=LLM"
       viewport: {width: 1280, height: 720}
-      timeout_ms: 5000
+      timeout_ms: 15000
+      wait_until: networkidle
+      wait_after_load_ms: 500
+      # filter: ['div', 'button']           # optional CSS selectors for dom_tree
+      # with_hierarchy: false                # default false — collapsed tree
 
 backend:
   type: filesystem
@@ -563,23 +632,27 @@ The CLI reads this on every invocation. Framework stays generic; project specifi
 ### Implemented
 
 - Seven observation kinds: `scalar`, `boolean`, `rule_check`, `set`, `distribution`, `histogram`, `payload`
-- `payload` kind with schema-aware diff and markdown render (`html`, `elements`, `layered`, `interactive`, `accessibility_tree`, `screenshot`)
+- `payload` kind with schema-aware diff and rendering for `dom_tree` and `screenshot`
 - Pydantic-defined schemas with JSON Schema generation (cross-file `$ref`s, three independent version axes)
-- Kind-aware semantic diff and markdown rendering
-- Filesystem snapshot storage (internal — users only see `Dimensions`)
-- CLI: scope-prefixed `list`, `list-snapshots`, `schema`, `inspect`, `capture`, `show`, `report`, `diff`
-- `dimensions.config.yaml` for plugin discovery
-- Reference plugins: Data (with optional spec → JSON Schema generator) and Visual (with `BrowserInjectionProtocol` / `PlaywrightInjectionProtocol`)
+- Kind-aware semantic diff
+- Filesystem snapshot storage with directory-per-(dim, label) layout, content-addressed assets, dedup across labels
+- Async, multi-envelope plugin contract (`Plugin.collect` opens any number of named envelopes)
+- CLI (scope-prefixed): `list`, `list-snapshots`, `schema`, `inspect`, `capture`, `show`, `report`, `render-md`, `render-html`, `render-diff`, `diff`
+- `dimensions.config.yaml` for plugin discovery; auto-discovered schemas registry (`schemas_dir`)
+- Reference plugins:
+  - Data — multi-source, `JsonFileProtocol`, optional spec-conformance check (nested DSL → Draft 2020-12 JSON Schema → per-source `spec.conforms` rule_check)
+  - Visual — multi-URL, `PlaywrightBrowserProtocol` (async, networkidle settle), optional CSS-selector filter for the DOM tree, two envelopes per URL (`tree`, `screenshot`)
+- HTML rendering: mobile-first, JSON-driven DOM tree with parent-deduped computed_style; smart-tree visual layout reconstruction (positioned divs at the captured x/y/w/h with click-to-inspect branch panel)
+- Side-by-side diff reports: tree-diff (path-key-matched leaves with status badges + per-property deltas + click-to-expand ancestor chain; default filter `Changed`), screenshot-diff (3-panel grid + pixelmatch overlay using Playwright's algorithm)
 - Schema validation at write time and load time
-- Spec-driven data conformance (nested DSL → Draft 2020-12 schema → per-source `spec.conforms` rule_check)
 
 ### Future
 
 - In-memory and SQLite storage backends
-- Allure render target
 - `publish`, `failures`, `changes`, `history`, `summary`, `explain` CLI commands
 - Reference plugins for Web, CLI, Performance categories
-- Additional payload schemas: CSS rule inventory, network log, performance traces
+- Additional payload schemas: network log, performance traces, console messages
+- Optional gzip transport for static-served HTML reports
 
 ## The discipline
 

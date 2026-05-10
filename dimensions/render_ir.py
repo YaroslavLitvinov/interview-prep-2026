@@ -14,6 +14,8 @@ Recognised node types (extensible — renderers fall back gracefully):
 
   envelope          — root node for one envelope (header + children)
   comparison        — root node for one (dimension, label) diff (header + children)
+  comparison_envelope — root node for ONE envelope's side-by-side diff
+                       (children: screenshot_diff and/or tree_diff nodes)
   section           — generic grouping (title + children)
   field             — labelled scalar value (key / value / unit?)
   status_line       — labelled boolean (passed/failed)
@@ -21,10 +23,10 @@ Recognised node types (extensible — renderers fall back gracefully):
   set_summary       — set observation (label, items)
   distribution_table — distribution as a 2-col table
   histogram_table   — histogram top-N as a 2-col table
-  record_table      — payload `elements` / `layered` / `interactive`
-  html_excerpt      — payload `html`
   image             — payload `screenshot`
-  accessibility     — payload `accessibility_tree`
+  dom_tree          — payload `dom_tree` (visual hierarchical tree)
+  screenshot_diff   — side-by-side baseline / current / pixelmatch overlay
+  tree_diff         — leaves with diff status + per-property deltas + ancestor chains
   unknown_payload   — payload with an unrecognised schema
   unknown_obs       — observation with an unrecognised kind
 

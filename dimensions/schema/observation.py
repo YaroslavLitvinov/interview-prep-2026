@@ -19,6 +19,13 @@ class ObservationCommon(BaseModel):
 
     id: str = Field(..., description="Stable identifier for the observation.")
     label: str = Field(..., description="Human-readable label.")
+    entity_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Content-derived stable entity id assigned by the framework. "
+            "Comments and resolutions anchor to this; survives recapture."
+        ),
+    )
     required: bool = Field(
         default=False,
         description=(
@@ -100,10 +107,8 @@ class PayloadObservation(ObservationCommon):
         ...,
         description=(
             "Discriminator naming the shape of `data`. Recognised values "
-            "(e.g., 'html', 'elements', 'layered', 'interactive', "
-            "'accessibility_tree', 'screenshot', 'comparison') get "
-            "first-class diff/render; unknown values fall back to a "
-            "generic JSON dump."
+            "('dom_tree', 'screenshot', 'comparison') get first-class "
+            "diff/render; unknown values fall back to a generic JSON dump."
         ),
     )
     data: Any = Field(

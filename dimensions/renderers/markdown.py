@@ -52,8 +52,6 @@ class MarkdownRenderer:
     """
 
     # truncation limits (also exposed as overridable class attrs)
-    HTML_PREVIEW_LINES = 60
-    TABLE_ROW_LIMIT    = 50
     INLINE_SET_LIMIT   = 10
     SET_PREVIEW        = 8
     DISTRIB_TOP        = 10
@@ -196,45 +194,6 @@ class MarkdownRenderer:
 
     # ── payload node renderers ───────────────────────────────────────
 
-    def render_html_excerpt(self, node: ReportNode) -> List[str]:
-        d = node.data
-        html_lines = (d.get("html") or "").splitlines()
-        out = [
-            f"- **{d['label']}** (`{d['id']}`) — payload `html`",
-            f"    - URL: `{d.get('url')}`",
-            f"    - Status: `{d.get('status')}`",
-            f"    - Length: {d.get('length', 0)} chars",
-            "",
-            "    ```html",
-            *(f"    {ln}" for ln in html_lines[: self.HTML_PREVIEW_LINES]),
-            *(["    …"] if len(html_lines) > self.HTML_PREVIEW_LINES else []),
-            "    ```",
-        ]
-        return out
-
-    def render_record_table(self, node: ReportNode) -> List[str]:
-        d = node.data
-        cols = d.get("columns", [])
-        rows = d.get("rows", [])
-        out = [
-            f"- **{d['label']}** (`{d['id']}`) — payload `{d['schema']}` "
-            f"— {len(rows)} rows × {len(cols)} columns",
-            "",
-            "    | " + " | ".join(cols) + " |",
-            "    |" + "|".join("---" for _ in cols) + "|",
-        ]
-        for row in rows[: self.TABLE_ROW_LIMIT]:
-            if isinstance(row, dict):
-                cells = [str(row.get(c, ""))[:80].replace("|", "\\|") for c in cols]
-            elif isinstance(row, list):
-                cells = [str(c)[:80].replace("|", "\\|") for c in row]
-            else:
-                cells = [str(row)]
-            out.append("    | " + " | ".join(cells) + " |")
-        if len(rows) > self.TABLE_ROW_LIMIT:
-            out.append(f"    | _… +{len(rows) - self.TABLE_ROW_LIMIT} more_ |")
-        return out
-
     def render_image(self, node: ReportNode) -> List[str]:
         d = node.data
         out = [
@@ -251,13 +210,6 @@ class MarkdownRenderer:
         if img_src:
             out.append(f"![{d['label']}]({img_src})")
         return out
-
-    def render_accessibility(self, node: ReportNode) -> List[str]:
-        d = node.data
-        return [
-            f"- **{d['label']}** (`{d['id']}`) — payload `accessibility_tree`",
-            "    - _(accessibility tree — JSON payload)_",
-        ]
 
     # ── dom_tree (leaves at top, ancestors revealed below) ───────────────
 
@@ -468,33 +420,6 @@ class MarkdownRenderer:
         schema = d.get("payload_schema") or "?"
         raw = d.get("raw") or {}
         head = f"### Δ `{d['id']}` — payload `{schema}` changed"
-
-        if schema in {"elements", "layered", "interactive"}:
-            added = raw.get("added") or []
-            removed = raw.get("removed") or []
-            modified = raw.get("modified") or {}
-            out = [head]
-            if added:
-                out.append(f"- **Added:** {len(added)} row(s)")
-                for r in added[:10]:
-                    out.append(f"    - `{r.get('selector', r) if isinstance(r, dict) else r}`")
-            if removed:
-                out.append(f"- **Removed:** {len(removed)} row(s)")
-                for r in removed[:10]:
-                    out.append(f"    - `{r.get('selector', r) if isinstance(r, dict) else r}`")
-            if modified:
-                out.append(f"- **Modified:** {len(modified)} row(s)")
-                for sel in list(modified.keys())[:10]:
-                    out.append(f"    - `{sel}`")
-            return out
-
-        if schema == "html":
-            return [
-                head,
-                f"- Length: `{raw.get('length_before')}` → `{raw.get('length_after')}` chars",
-                f"- Status: `{raw.get('status_before')}` → `{raw.get('status_after')}`",
-                f"- First diff offset: `{raw.get('first_diff_offset')}`",
-            ]
 
         if schema == "screenshot":
             return [

@@ -1,0 +1,28 @@
+{
+  "name": "login_flow",
+  "plugin": "visual",
+  "protocol": "browser",
+  "fixture": {
+    "url": "https://fixture.test/login",
+    "title": "Sign in",
+    "dom_walk": {
+      "html>body>main>form[testid=login]>input[name=email]": {},
+      "html>body>main>form[testid=login]>input[name=password]": {},
+      "html>body>main>form[testid=login]>button[name=submit]": {"text": "Sign in"}
+    }
+  },
+  "steps": [
+    {"action": "type",
+     "target": "html>body>main>form[testid=login]>input[name=email]",
+     "value": "alice@example.com"},
+    {"action": "type",
+     "target": "html>body>main>form[testid=login]>input[name=password]",
+     "value": "hunter2"},
+    {"action": "click",
+     "target": "html>body>main>form[testid=login]>button[name=submit]"}
+  ],
+  "expectations": {
+    "envelopes": ["main.tree"],
+    "observations_must_include": ["page.dom_tree", "page.screen_map"]
+  }
+}

@@ -80,6 +80,29 @@ class EnvelopeBuilder:
         self._envelope_name = envelope_name
         self._pending_assets: Dict[str, "tuple[bytes, str, str]"] = {}
 
+    def _stamp_entity_id(self, ob: Dict[str, Any]) -> Dict[str, Any]:
+        """Stamp a content-derived stable id onto an observation.
+
+        The id hashes (dimension, envelope, observation id, kind) — and
+        for payloads, the schema as well — so the same logical entity
+        gets the same id across recaptures. Comments anchored to
+        ``entity_id`` therefore survive re-collect.
+        """
+        import hashlib
+        parts = [
+            self.dimension or "",
+            self._envelope_name or "",
+            str(ob.get("id") or ""),
+            str(ob.get("kind") or ""),
+            str(ob.get("payload_schema") or ""),
+        ]
+        digest = hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
+        ob["entity_id"] = f"e_{digest[:16]}"
+        return ob
+
+    def _append(self, ob: Dict[str, Any]) -> None:
+        self.observations.append(self._stamp_entity_id(ob))
+
     # ── observation builders (push-style) ────────────────────────────────
 
     def scalar(
@@ -91,14 +114,14 @@ class EnvelopeBuilder:
         *,
         required: bool = False,
     ) -> None:
-        self.observations.append(
+        self._append(
             obs.scalar(id, label, value, unit=unit, required=required)
         )
 
     def boolean(
         self, id: str, label: str, value: bool, *, required: bool = False
     ) -> None:
-        self.observations.append(
+        self._append(
             obs.boolean(id, label, value, required=required)
         )
 
@@ -113,7 +136,7 @@ class EnvelopeBuilder:
         checked_count: Optional[int] = None,
         required: bool = False,
     ) -> None:
-        self.observations.append(
+        self._append(
             obs.rule_check(
                 id,
                 label,
@@ -128,7 +151,7 @@ class EnvelopeBuilder:
     def set(
         self, id: str, label: str, items, *, required: bool = False
     ) -> None:
-        self.observations.append(
+        self._append(
             obs.set_observation(id, label, items, required=required)
         )
 
@@ -140,7 +163,7 @@ class EnvelopeBuilder:
         *,
         required: bool = False,
     ) -> None:
-        self.observations.append(
+        self._append(
             obs.distribution(id, label, buckets, required=required)
         )
 
@@ -153,7 +176,7 @@ class EnvelopeBuilder:
         *,
         required: bool = False,
     ) -> None:
-        self.observations.append(
+        self._append(
             obs.histogram(id, label, counts, top_n=top_n, required=required)
         )
 
@@ -166,7 +189,7 @@ class EnvelopeBuilder:
         *,
         required: bool = False,
     ) -> None:
-        self.observations.append(
+        self._append(
             obs.payload(id, label, payload_schema, data, required=required)
         )
 

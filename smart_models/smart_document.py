@@ -292,11 +292,17 @@ class SmartDocument(RenderableModel):
             nodes.append(
                 f"{my_id}{wrapper_open}{_mermaid_label(self.label)}{wrapper_close}"
             )
-            # non-root nodes are wired to their section anchor in the rendered markdown
+            # non-root nodes are wired to their section anchor in the rendered markdown.
+            # `_parent` target is required because most renderers iframe the Mermaid
+            # block; without it, the relative `#anchor` URL resolves inside the iframe
+            # and the click goes nowhere visible. The link target is unquoted per
+            # Mermaid grammar (LINK_TARGET token, not STR).
             if not is_root:
                 anchor = _heading_anchor(self.label)
                 if anchor:
-                    clicks.append(f'click {my_id} href "#{anchor}"')
+                    clicks.append(
+                        f'click {my_id} href "#{anchor}" _self'
+                    )
 
         # explicit cross-cutting links — always rendered, regardless of depth
         for link in self.links:

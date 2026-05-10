@@ -186,86 +186,18 @@ def _diff_payload(
 
     schema = a_schema or b_schema
 
-    # Tables (elements / layered / interactive): row-keyed diff.
-    if schema in {"elements", "layered", "interactive"} and isinstance(
-        b_data, dict
-    ) and isinstance(a_data, dict):
-        return _diff_table(schema, b_data, a_data)
-
-    # HTML: report length delta + first differing offset.
-    if schema == "html" and isinstance(b_data, dict) and isinstance(a_data, dict):
-        return _diff_html(b_data, a_data)
-
     # Screenshot: compare hash and size.
     if schema == "screenshot" and isinstance(b_data, dict) and isinstance(
         a_data, dict
     ):
         return _diff_screenshot(b_data, a_data)
 
-    # Fallback: structural
+    # Fallback: structural diff (covers `dom_tree` and any future schemas).
     return {
         "kind": PAYLOAD,
         "payload_schema": schema,
         "before": b_data,
         "after": a_data,
-    }
-
-
-def _diff_table(
-    schema: str, before: Dict[str, Any], after: Dict[str, Any]
-) -> Dict[str, Any]:
-    """Per-row diff for table-shaped payloads keyed on the `selector` column."""
-    columns = after.get("columns") or before.get("columns") or []
-
-    def _index(rows):
-        out = {}
-        for row in rows or []:
-            if isinstance(row, dict) and "selector" in row:
-                out[row["selector"]] = row
-        return out
-
-    b_rows = _index(before.get("rows") or [])
-    a_rows = _index(after.get("rows") or [])
-    added = sorted(set(a_rows) - set(b_rows))
-    removed = sorted(set(b_rows) - set(a_rows))
-    modified: Dict[str, Dict[str, Any]] = {}
-    for sel in set(b_rows) & set(a_rows):
-        if b_rows[sel] != a_rows[sel]:
-            modified[sel] = {"before": b_rows[sel], "after": a_rows[sel]}
-    if not added and not removed and not modified:
-        return None  # type: ignore[return-value]
-    return {
-        "kind": PAYLOAD,
-        "payload_schema": schema,
-        "columns": columns,
-        "added": [a_rows[s] for s in added],
-        "removed": [b_rows[s] for s in removed],
-        "modified": modified,
-    }
-
-
-def _diff_html(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
-    b_html = before.get("html") or ""
-    a_html = after.get("html") or ""
-    if b_html == a_html:
-        return None  # type: ignore[return-value]
-    first_diff = -1
-    for i, (bc, ac) in enumerate(zip(b_html, a_html)):
-        if bc != ac:
-            first_diff = i
-            break
-    if first_diff == -1:
-        first_diff = min(len(b_html), len(a_html))
-    return {
-        "kind": PAYLOAD,
-        "payload_schema": "html",
-        "length_before": len(b_html),
-        "length_after": len(a_html),
-        "first_diff_offset": first_diff,
-        "url_before": before.get("url"),
-        "url_after": after.get("url"),
-        "status_before": before.get("status"),
-        "status_after": after.get("status"),
     }
 
 
