@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import base64
 import html as _html
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from dimensions.render_ir import Attachment, ReportNode
 
@@ -72,6 +72,19 @@ a:hover{ text-decoration:underline; }
 }
 .observation > .label{ font-weight:600; }
 .observation > .body{ margin-top:.25rem; }
+.observation details.obs-body > summary{
+  cursor:pointer; list-style:none; user-select:none;
+  display:flex; gap:.5em; flex-wrap:wrap; align-items:center;
+}
+.observation details.obs-body > summary::-webkit-details-marker{ display:none; }
+.observation details.obs-body > summary::before{
+  content:"▸"; display:inline-block; width:1em; color:var(--muted);
+  transition:transform .15s;
+}
+.observation details.obs-body[open] > summary::before{
+  transform:rotate(90deg);
+}
+.observation details.obs-body > :not(summary){ margin-top:.4rem; }
 .badge{
   display:inline-block; padding:.05em .55em; border-radius:.4em;
   font-size:.78rem; font-weight:600; vertical-align:middle;
@@ -85,6 +98,26 @@ a:hover{ text-decoration:underline; }
 .kv .v{ font-weight:500; }
 .violations{ margin:.4rem 0 0; padding-left:1.2rem; color:var(--muted); }
 .violations li{ font-family:ui-monospace,monospace; font-size:.85rem; }
+.test-banner{
+  display:flex; align-items:center; gap:.6rem; flex-wrap:wrap;
+  margin:0 0 1rem; padding:.8rem 1rem;
+  border-radius:.5rem; border:1px solid;
+  font-size:1rem;
+}
+.test-banner.pass{
+  background:rgba(34,197,94,.08);
+  border-color:var(--pass); color:var(--pass);
+}
+.test-banner.fail{
+  background:rgba(239,68,68,.08);
+  border-color:var(--fail); color:var(--fail);
+}
+.test-banner .status{ font-size:1.15rem; font-weight:700; }
+.test-banner .detail{ color:var(--muted); font-weight:400; }
+.test-banner ul{ margin:.4rem 0 0; padding-left:1.2rem; width:100%; }
+.test-banner ul li{
+  font-family:ui-monospace,monospace; font-size:.85rem; color:#7f1d1d;
+}
 .table-wrap{ overflow-x:auto; margin-top:.5rem; }
 table{ border-collapse:collapse; width:100%; font-size:.85rem; }
 th,td{ border:1px solid var(--line); padding:.3rem .5rem; text-align:left; vertical-align:top; }
@@ -647,6 +680,22 @@ _JS = """
         const head = document.createElement('div');
         head.className = 'branch-head';
         head.innerHTML = summary(node);
+        if (node.uipath) {
+          const upath = document.createElement('div');
+          upath.className = 'meta uipath-row';
+          upath.style.marginTop = '.2rem';
+          upath.style.wordBreak = 'break-all';
+          upath.innerHTML =
+            'UIPath: <code class="uipath" style="cursor:pointer" ' +
+            'title="click to copy">' + ESC(node.uipath) + '</code>';
+          upath.querySelector('code').addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            navigator.clipboard?.writeText(node.uipath);
+            ev.target.style.outline = '2px solid #22c55e';
+            setTimeout(() => { ev.target.style.outline = ''; }, 600);
+          });
+          card.appendChild(upath);
+        }
         const inh = inheritedCount(node, parentNode, nodes);
         const hint = document.createElement('span');
         hint.className = 'meta branch-hint';
@@ -1141,8 +1190,20 @@ class HtmlRenderer:
     # ── public entry ─────────────────────────────────────────────────
 
     def render(self, node: ReportNode) -> str:
+        return self.render_many([node])
+
+    def render_many(self, nodes: List[ReportNode]) -> str:
+        """Render multiple ReportNode roots into a single HTML page.
+
+        Use for grouped envelopes (e.g. a scenario's `.tree` and
+        `.screenshot` envelopes rendered together) so the reader sees
+        everything for one scenario in one place.
+        """
         import json as _json
-        body = "\n".join(self._render(node))
+        body = "\n".join(
+            "\n".join(self._render(n)) for n in nodes
+        )
+        node = nodes[0] if nodes else ReportNode(type="empty", data={})
         page_title = self.title or self._default_title(node)
         island = {
             "identity": self.report_identity,
@@ -1181,11 +1242,30 @@ class HtmlRenderer:
 
     def render_envelope(self, node: ReportNode) -> List[str]:
         d = node.data
-        children = self._render_children(node)
         required_marker = (
             ' <span class="badge fail" title="required">required</span>'
             if node.required else ""
         )
+        prov_html = ""
+        prov = d.get("provenance")
+        if isinstance(prov, dict):
+            plugin = esc(str(prov.get("plugin", "?")))
+            name = esc(str(prov.get("name", "?")))
+            path = prov.get("path")
+            label_txt = f"{plugin}/{name}"
+            link = (
+                f'<a href="{esc(str(path))}"><code>{label_txt}</code></a>'
+                if path else f"<code>{label_txt}</code>"
+            )
+            prov_html = (
+                f'<div class="meta">Driven by scenario → {link}</div>'
+            )
+
+        # Lift `scenario.assertions` out of the children list into a
+        # banner above the observations so the test result is the first
+        # thing a reviewer sees. Step list also pulled up if present.
+        banner_html, children = self._extract_test_banner(node)
+
         return [
             '<article class="envelope">',
             "<header>",
@@ -1193,13 +1273,104 @@ class HtmlRenderer:
             f"envelope <code>{esc(d['envelope_name'])}</code>{required_marker}</h1>",
             f'<div class="meta">category <code>{esc(d["category"])}</code> · '
             f'captured <time>{esc(d["captured_at"])}</time></div>',
+            prov_html,
             f'<div class="subject">{self._html_subject(d["subject"])}</div>',
             "</header>",
+            banner_html,
             '<section class="observations">',
             *children,
             "</section>",
             "</article>",
         ]
+
+    # Lower → earlier in the rendered observations section.
+    _OBS_RENDER_PRIORITY = {
+        "rule_result":        1,
+        "status_line":        2,
+        "field":              3,
+        "set_summary":        4,
+        "distribution_table": 5,
+        "histogram_table":    5,
+        "image":              6,
+        "dom_tree":           7,
+        "screen_map":         8,
+        "unknown_payload":    9,
+        "unknown_obs":        9,
+    }
+
+    def _obs_render_order(self, child: ReportNode) -> Tuple[int, str]:
+        prio = self._OBS_RENDER_PRIORITY.get(child.type, 9)
+        oid = (child.data or {}).get("id", "") if isinstance(child.data, dict) else ""
+        return (prio, oid)
+
+    def _extract_test_banner(self, node: ReportNode):
+        """Find scenario.assertions among observation children, render
+        a prominent pass/fail banner, and return (banner_html, remaining
+        children HTML). If no scenario.assertions present, returns
+        empty banner and the original children unchanged.
+        """
+        kept = []
+        assertion_data = None
+        steps_data = None
+        for child in node.children:
+            d = child.data if isinstance(child.data, dict) else {}
+            obs_id = d.get("id")
+            if obs_id == "scenario.assertions":
+                assertion_data = d
+                continue
+            if obs_id == "scenario.steps":
+                steps_data = d
+                continue
+            kept.append(child)
+        # Status-y observations (booleans, rule_checks) first, image
+        # next, dom_tree last (it's the largest payload).
+        kept.sort(key=self._obs_render_order)
+        # Render remaining children HTML
+        remaining = []
+        for c in kept:
+            method = getattr(self, f"render_{c.type}", self.render_unknown)
+            piece = method(c)
+            if isinstance(piece, list):
+                remaining.extend(piece)
+            else:
+                remaining.append(piece)
+
+        if assertion_data is None:
+            return "", remaining
+
+        passed = bool(assertion_data.get("passed"))
+        checked = assertion_data.get("checked_count")
+        violations = assertion_data.get("violations_sample") or []
+        violations_count = assertion_data.get("violations_count", 0)
+
+        cls = "pass" if passed else "fail"
+        glyph = "✓" if passed else "✗"
+        status = "TEST PASSED" if passed else "TEST FAILED"
+        detail_parts = []
+        if checked is not None:
+            detail_parts.append(f"{checked} assertion(s) checked")
+        if violations_count:
+            detail_parts.append(f"{violations_count} violation(s)")
+        detail = " · ".join(detail_parts)
+
+        parts = [
+            f'<div class="test-banner {cls}">',
+            f'<span class="status">{glyph} {status}</span>',
+        ]
+        if detail:
+            parts.append(f'<span class="detail">{esc(detail)}</span>')
+        if violations:
+            parts.append("<ul>")
+            for v in violations:
+                parts.append(f"<li>{esc(str(v))}</li>")
+            parts.append("</ul>")
+        if steps_data:
+            parts.append('<ul style="width:100%;color:var(--muted);">')
+            for item in (steps_data.get("items") or []):
+                parts.append(f"<li>{esc(str(item))}</li>")
+            parts.append("</ul>")
+        parts.append("</div>")
+        return "\n".join(parts), remaining
 
     def render_comparison(self, node: ReportNode) -> List[str]:
         d = node.data
@@ -1335,66 +1506,8 @@ class HtmlRenderer:
             required=node.required,
         )
 
-    # ── screen_map ────────────────────────────────────────────────────
-
-    SCREEN_MAP_ROW_LIMIT = 500
-
-    TIER_GLYPHS = {
-        "STRONG": "🟢",
-        "MEDIUM": "🟡",
-        "WEAK":   "🔴",
-    }
-
-    def render_screen_map(self, node: ReportNode) -> str:
-        d = node.data
-        rows = d.get("rows", [])
-        chips_html = []
-        if d.get("url"):
-            chips_html.append(
-                f'<span class="meta">url: <code>{esc(d["url"])}</code></span>'
-            )
-        if d.get("interactive_count"):
-            chips_html.append(
-                f'<span class="meta">{d["interactive_count"]} interactive</span>'
-            )
-        if d.get("heading_count"):
-            chips_html.append(
-                f'<span class="meta">{d["heading_count"]} headings</span>'
-            )
-        if d.get("form_count"):
-            chips_html.append(
-                f'<span class="meta">{d["form_count"]} forms</span>'
-            )
-
-        body_rows = []
-        for r in rows[: self.SCREEN_MAP_ROW_LIMIT]:
-            tier_raw = str(r.get("stability") or "weak").upper()
-            glyph = self.TIER_GLYPHS.get(tier_raw, "⚪")
-            role = r.get("role") or "–"
-            name = r.get("name") or "–"
-            tier_cell = f"{glyph} {esc(tier_raw)}"
-            body_rows.append((
-                f"<code>{esc(r['uipath'])}</code>",
-                esc(str(role)),
-                esc(str(name)),
-                tier_cell,
-            ))
-
-        title = (
-            f"{esc(d['label'])} "
-            f"<span class=\"meta\">({d['element_count']} elements)</span>"
-        )
-        if chips_html:
-            title = title + " " + " ".join(chips_html)
-        return self._table_card(
-            obs_id=d.get("id"),
-            title=title,
-            columns=["UIPath", "Role", "Name", "Tier"],
-            rows=body_rows,
-            extra_count=max(0, len(rows) - self.SCREEN_MAP_ROW_LIMIT),
-            filterable=True,
-            required=node.required,
-        )
+    # screen_map: see BaseRenderSchema.render_payload_screen_map —
+    # emitted as a `hidden` IR node and skipped by render_hidden.
 
     # ── side-by-side diff renderers ──────────────────────────────────
 
@@ -1519,14 +1632,13 @@ class HtmlRenderer:
     def render_image(self, node: ReportNode) -> str:
         d = node.data
         src = self._image_src(node)
+        head = (
+            f'<span class="label">{esc(d["label"])}</span> '
+            f'<span class="meta">payload <code>screenshot</code> · '
+            f'{d.get("width") or 0}×{d.get("height") or 0}px · '
+            f'{d.get("size_bytes") or 0} bytes</span>'
+        )
         body = (
-            f"<div class=\"label\">{esc(d['label'])} "
-            f'<span class="meta">payload <code>screenshot</code></span></div>'
-            '<div class="body"><div class="kv">'
-            f'<span class="k">format</span> <span class="v"><code>{esc(d.get("format") or "")}</code></span>'
-            f' · <span class="k">size</span> <span class="v">{d.get("width") or 0}×{d.get("height") or 0} px</span>'
-            f' · <span class="k">{d.get("size_bytes") or 0}</span> <span class="v">bytes</span>'
-            "</div>"
             f'<div class="kv"><span class="k">sha256</span> '
             f'<span class="v"><code>{esc(d.get("sha256") or "")}</code></span></div>'
         )
@@ -1537,8 +1649,11 @@ class HtmlRenderer:
                 f'<figcaption>{esc(d["label"])} (tap to enlarge)</figcaption>'
                 "</figure>"
             )
-        body += "</div>"
-        return self._obs_card(d.get("id"), body, required=node.required, entity_id=d.get("entity_id"))
+        return self._obs_card(
+            d.get("id"), head, required=node.required,
+            entity_id=d.get("entity_id"),
+            body_html=body, body_open=True,
+        )
 
     # ── dom_tree (single JSON + JS-rendered, no duplicates) ────────────
 
@@ -1565,6 +1680,16 @@ class HtmlRenderer:
         # Flatten the IR tree into an indexed list (idx, parent), ready
         # for JS lookup. Children are dropped; JS rebuilds adjacency.
         nodes_list = _flatten_tree(d.get("root"))
+        # Stamp each node with its canonical UIPath so the smart-tree
+        # inspector can show a click-to-copy UIPath alongside other
+        # element props.
+        try:
+            from dimensions.uipath import derive_all, format_uipath
+            for idx, p in derive_all(nodes_list).items():
+                if 0 <= idx < len(nodes_list):
+                    nodes_list[idx]["uipath"] = format_uipath(p)
+        except Exception:
+            pass
 
         obs_id = d.get("id") or ""
         slug = _slug(obs_id) or "tree"
@@ -1622,21 +1747,19 @@ class HtmlRenderer:
                 f"</details>"
             )
 
+        # dom_tree already exposes two foldables (smart-tree, tree view)
+        # internally, so wrapping it in another outer <details> would
+        # double-fold. Render inline — the inner sections handle their
+        # own collapse state.
         body = (
             f"<div class=\"label\">{esc(d['label'])} "
-            f"<span class=\"meta\">payload <code>dom_tree</code></span></div>"
+            f'<span class="meta">payload <code>dom_tree</code> · '
+            f"{d.get('kept_count', 0):,} kept · "
+            f"{d.get('skipped_count', 0):,} skipped · "
+            f"{d.get('node_count', 0):,} total</span></div>"
             f"<div class='body'>"
             f"<div class='kv'>{flt_desc}</div>"
-            f"<div class='kv'><span class='k'>nodes</span> "
-            f"<span class='v'>{d.get('node_count', 0):,}</span> · "
-            f"<span class='k'>kept</span> "
-            f"<span class='v'>{d.get('kept_count', 0):,}</span> · "
-            f"<span class='k'>skipped</span> "
-            f"<span class='v'>{d.get('skipped_count', 0):,}</span></div>"
 
-            # Two views over the same JSON walk — JS dispatches into both.
-            # Smart-tree first (visual reconstruction is the primary read),
-            # tree view second (analytical drill-down by leaf).
             f"<div class='dom-tree-views' data-source=\"{data_id}\">"
             f"<details open>"
             f"<summary>Smart-tree <span class='meta'>(visual layout reconstruction; click any element to inspect its branch)</span></summary>"
@@ -1811,6 +1934,9 @@ class HtmlRenderer:
 
     # ── fallback ──────────────────────────────────────────────────────
 
+    def render_hidden(self, node: ReportNode) -> str:
+        return ""
+
     def render_unknown(self, node: ReportNode) -> str:
         return f'<div class="observation"><span class="badge info">?</span> unhandled IR node type <code>{esc(node.type)}</code></div>'
 
@@ -1829,7 +1955,18 @@ class HtmlRenderer:
         *,
         required: bool = False,
         entity_id: Optional[str] = None,
+        body_html: str = "",
+        body_open: bool = True,
     ) -> str:
+        """Render one observation card.
+
+        ``inner_html`` is the always-visible head — status + label + meta.
+        ``body_html`` (optional) is the substantial payload (table /
+        image / tree). When provided, the card wraps the body in
+        ``<details>`` so reviewers can collapse it. ``body_open=False``
+        makes the body default-collapsed (use for huge content like
+        the full DOM tree).
+        """
         oid_attr = f' id="obs-{esc(obs_id)}"' if obs_id else ""
         oid_link = (
             f' <a class="meta" href="#obs-{esc(obs_id)}">#{esc(obs_id)}</a>'
@@ -1844,10 +1981,19 @@ class HtmlRenderer:
             f'<div class="comments-thread" data-thread-for="{esc(entity_id)}"></div>'
             if entity_id else ""
         )
+        if body_html:
+            open_attr = " open" if body_open else ""
+            content = (
+                f'<details class="obs-body"{open_attr}>'
+                f'<summary>{inner_html}{oid_link}{req}</summary>'
+                f'{body_html}'
+                f'</details>'
+                f'{thread}'
+            )
+        else:
+            content = f'{inner_html}{oid_link}{req}{thread}'
         return (
-            f'<div class="observation"{oid_attr}{eid_attr}>'
-            f'{inner_html}{oid_link}{req}{thread}'
-            f'</div>'
+            f'<div class="observation"{oid_attr}{eid_attr}>{content}</div>'
         )
 
     def _diff_card(

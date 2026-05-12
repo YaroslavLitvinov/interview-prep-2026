@@ -186,13 +186,17 @@ class PlaywrightBrowserProtocol(BrowserProtocol):
                 except Exception:  # noqa: BLE001 — best-effort settle
                     pass
 
-                if self.wait_for_selector:
-                    try:
-                        await page.wait_for_selector(
-                            self.wait_for_selector, timeout=timeout_ms,
-                        )
-                    except Exception:  # noqa: BLE001
-                        pass
+                selectors = self.wait_for_selector
+                if selectors:
+                    if isinstance(selectors, str):
+                        selectors = [selectors]
+                    for sel in selectors:
+                        try:
+                            await page.wait_for_selector(
+                                sel, timeout=timeout_ms,
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
 
                 if self.wait_after_load_ms:
                     await page.wait_for_timeout(self.wait_after_load_ms)

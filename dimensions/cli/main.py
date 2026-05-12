@@ -33,7 +33,7 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from dimensions.config import DEFAULT_CONFIG_NAME
 from dimensions.dimensions import Dimensions
@@ -206,27 +206,72 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
 
 def cmd_capture(args: argparse.Namespace) -> int:
-    dims = _build_dims(Path(args.config))
-    captured = asyncio.run(
-        dims.capture(args.label, dimension_name=args.dim)
+    """Run every discovered scenario under a single user-chosen label.
+
+    Test cases are sourced exclusively from ``tests/scenarios/`` (or
+    whatever ``scenario_roots`` declares). The ``urls:`` block in
+    ``dimensions.config.yaml`` is **not** a list of capture targets —
+    it's a named host catalog consumed via ``${name}`` substitution
+    inside scenario fixtures.
+
+    Envelope names are namespaced as ``<scenario>.<env>`` so multiple
+    scenarios coexist under one label without colliding.
+    """
+    from dimensions.config import Config
+    from dimensions.testing import (
+        UnresolvedScenarioVar, discover, resolve_scenario_urls,
     )
-    if not captured:
-        _print("No applicable dimensions to capture.")
+
+    cfg = Config.from_file(Path(args.config))
+    dims = _build_dims(Path(args.config))
+    plugin_classes = cfg.plugin_classes()
+    plugin_cfgs = {
+        e.get("name"): dict(e.get("config") or {}) for e in cfg.plugins
+    }
+    paths_by_key = _scenario_paths(cfg.scenario_roots)
+
+    scenarios = discover(roots=cfg.scenario_roots)
+    if args.dim:
+        scenarios = [s for s in scenarios if s.plugin == args.dim]
+
+    if not scenarios:
+        _print(
+            "No scenarios discovered. Add JSON files under "
+            f"{cfg.scenario_roots!r} (e.g. tests/scenarios/visual/<name>.json)."
+        )
         return 1
-    _print(f"Captured snapshot `{args.label}`:")
-    for dim_name, result in captured.items():
-        for env in result.envelopes:
-            n_obs = len(env.get("observations", []))
+
+    _print(f"Capturing label `{args.label}` from {len(scenarios)} scenario(s):")
+    failures = 0
+    for s in scenarios:
+        plugin_cls = plugin_classes.get(s.plugin)
+        if plugin_cls is None:
             _print(
-                f"  - {dim_name}/{env['envelope_name']}: "
-                f"{n_obs} observations validated and stored"
+                f"  ⚠️  {s.plugin}/{s.name}: plugin not registered "
+                f"({sorted(plugin_classes)})"
             )
-        if result.pending_assets:
-            _print(
-                f"    + {len(result.pending_assets)} asset(s) → "
-                f".dimensions/snapshots/{dim_name}/{args.label}/assets/"
+            failures += 1
+            continue
+        try:
+            resolved = resolve_scenario_urls(s, cfg.plugin_urls(s.plugin))
+        except UnresolvedScenarioVar as exc:
+            _print(f"  ❌ {s.plugin}/{s.name}: {exc}")
+            failures += 1
+            continue
+        try:
+            envs = _run_and_persist_scenario(
+                resolved, plugin_cls, dims, plugin_cfgs.get(s.plugin, {}),
+                label=args.label,
+                source_path=paths_by_key.get((s.plugin, s.name)),
+                namespace_envelopes=True,
             )
-    return 0
+        except Exception as exc:  # noqa: BLE001
+            _print(f"  ❌ {s.plugin}/{s.name}: {type(exc).__name__}: {exc}")
+            failures += 1
+            continue
+        _print(f"  ✅ {s.plugin}/{s.name}: {envs} envelope(s)")
+
+    return 0 if failures == 0 else 1
 
 
 def cmd_show(args: argparse.Namespace) -> int:
@@ -559,40 +604,54 @@ def cmd_render_html(args: argparse.Namespace) -> int:
             ]
         except Exception:
             label_comments = []
-        index_links: List[str] = []
+        # Group envelopes by scenario prefix so .tree + .screenshot
+        # for the same scenario land in a single HTML page.
+        groups: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
         for env_name in env_names:
             try:
                 envelope = dims.load(name, args.label, env_name)
             except SnapshotValidationError as e:
                 print(f"✗ {name}/{env_name}: {e}", file=sys.stderr)
                 continue
-            ir = schema.render_envelope(envelope)
+            group_key = _envelope_group_key(envelope, env_name)
+            groups.setdefault(group_key, []).append((env_name, envelope))
+
+        index_rows: List[Dict[str, Any]] = []
+        for group_key, items in groups.items():
+            irs = [schema.render_envelope(e) for _, e in items]
             html = HtmlRenderer(
                 asset_loader=loader,
                 inline_assets=args.inline_assets,
-                title=f"{name} / {args.label} / {env_name}",
+                title=f"{name} / {args.label} / {group_key}",
                 comments=label_comments,
                 report_identity={
                     "dimension":     name,
                     "label":         args.label,
-                    "envelope_name": env_name,
+                    "envelope_name": group_key,
                     "kind":          "snapshot",
                     "api_base":      getattr(args, "api_base", None),
                 },
-            ).render(ir)
-            (out_dir / f"{env_name}.html").write_text(html)
-            index_links.append(f'<li><a href="{env_name}.html">{env_name}</a></li>')
+            ).render_many(irs)
+            (out_dir / f"{group_key}.html").write_text(html)
+
+            # Pull test result from whichever envelope carries it.
+            result = None
+            scenario = None
+            for _, env in items:
+                if result is None:
+                    result = _envelope_test_result(env)
+                if scenario is None:
+                    scenario = (env.get("provenance") or {}).get("name")
+            index_rows.append({
+                "env_name": group_key,
+                "result":   result,
+                "scenario": scenario,
+            })
             written += 1
 
-        if index_links:
+        if index_rows:
             (out_dir / "index.html").write_text(
-                f"<!doctype html><html lang=en><head><meta charset=utf-8>"
-                f"<meta name=viewport content='width=device-width,initial-scale=1'>"
-                f"<title>{name} / {args.label}</title>"
-                f"<style>body{{font:16px/1.5 sans-serif;max-width:600px;margin:2rem auto;padding:1rem}}"
-                f"a{{color:#2563eb;text-decoration:none}}</style></head><body>"
-                f"<h1>{name} / {args.label}</h1><ul>{''.join(index_links)}</ul>"
-                f"</body></html>"
+                _build_label_index_html(name, args.label, index_rows)
             )
 
     if not written:
@@ -826,21 +885,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_scn = sub.add_parser(
         "scenarios",
         help=(
-            "Run discovered Scenario fixtures and persist their results "
-            "as snapshots (label = scenario name). Use the usual show / "
-            "render-md / render-html commands on those labels afterwards."
+            "List discovered scenarios. Running them is the job of "
+            "`capture <label>` — scenarios are the test cases; the "
+            "label is just where the captured envelopes are persisted."
         ),
     )
     p_scn.add_argument(
-        "scenario_action", choices=("run", "list"),
-        help="run: execute scenarios and persist envelopes; list: print discovered scenarios",
-    )
-    p_scn.add_argument(
-        "scenario_name", nargs="?", default=None,
-        help=(
-            "Specific scenario to run (matches `name` or `plugin/name`). "
-            "Omit to run every discovered scenario."
-        ),
+        "scenario_action", choices=("list",),
+        help="list: print every discovered scenario as `<plugin>/<name>`",
     )
 
     p_comment = sub.add_parser(
@@ -879,115 +931,56 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def cmd_scenarios(args: argparse.Namespace) -> int:
-    """Drive every (or one) discovered Scenario through its plugin via a
-    fixture protocol, then persist the produced envelopes as regular
-    snapshots under label = scenario name.
-
-    Reuses the live-capture machinery (`Dimension.collect()`) so replay
-    envelopes are byte-identical in shape to real captures — they
-    validate against the same schema, get stamped with `captured_at`,
-    stage assets the same way, and render via every existing command
-    without any special case.
-    """
+    """List every discovered scenario as ``<plugin>/<name>``."""
     from dimensions.config import Config
-    from dimensions.dimension import Dimension
-    from dimensions.testing import (
-        UnresolvedScenarioVar, discover,
-        make_fixture_protocol, resolve_scenario_urls,
-    )
+    from dimensions.testing import discover
 
     cfg = Config.from_file(Path(args.config))
-    dims = _build_dims(Path(args.config))
-    plugin_classes = cfg.plugin_classes()
-
-    # Discovery with paths so each envelope can record where it came from.
     scenarios = discover(roots=cfg.scenario_roots)
-    paths_by_key = _scenario_paths(cfg.scenario_roots)
     if args.dim:
         scenarios = [s for s in scenarios if s.plugin == args.dim]
-    if args.scenario_name:
-        scenarios = [
-            s for s in scenarios
-            if s.name == args.scenario_name
-            or f"{s.plugin}/{s.name}" == args.scenario_name
-        ]
-        if not scenarios:
-            print(
-                f"scenario {args.scenario_name!r} not found",
-                file=sys.stderr,
-            )
-            return 1
-
-    if args.scenario_action == "list":
-        for s in scenarios:
-            print(f"{s.plugin}/{s.name}")
-        return 0
-
-    # action == "run"
-    if not scenarios:
-        print("No scenarios discovered.", file=sys.stderr)
-        return 1
-
-    failures = 0
     for s in scenarios:
-        plugin_cls = plugin_classes.get(s.plugin)
-        if plugin_cls is None:
-            print(
-                f"⚠️  {s.plugin}/{s.name}: plugin not registered in config "
-                f"({sorted(plugin_classes)})",
-                file=sys.stderr,
-            )
-            failures += 1
-            continue
-        try:
-            resolved = resolve_scenario_urls(s, cfg.plugin_urls(s.plugin))
-        except UnresolvedScenarioVar as exc:
-            print(f"❌ {s.plugin}/{s.name}: {exc}", file=sys.stderr)
-            failures += 1
-            continue
-        try:
-            envelope_count = _run_and_persist_scenario(
-                resolved, plugin_cls, dims,
-                source_path=paths_by_key.get((s.plugin, s.name)),
-            )
-        except Exception as exc:  # noqa: BLE001 — surface, don't crash batch
-            print(
-                f"❌ {s.plugin}/{s.name}: {type(exc).__name__}: {exc}",
-                file=sys.stderr,
-            )
-            failures += 1
-            continue
-        print(
-            f"✅ {s.plugin}/{s.name} → "
-            f"label `{s.name}` · {envelope_count} envelope(s)"
-        )
-
-    return 0 if failures == 0 else 1
+        print(f"{s.plugin}/{s.name}")
+    return 0
 
 
 def _run_and_persist_scenario(
-    scenario, plugin_class, dims: Dimensions,
-    *, source_path: Optional[Path] = None,
+    scenario, plugin_class, dims: Dimensions, plugin_cfg: Dict[str, Any],
+    *,
+    label: Optional[str] = None,
+    source_path: Optional[Path] = None,
+    namespace_envelopes: bool = False,
 ) -> int:
-    """Build the fixture-driven plugin, run Dimension.collect(), persist."""
+    """Run a scenario through the plugin's real protocol (Playwright for
+    visual), then evaluate ``scenario.tests`` against the captured walk.
+    """
     from dimensions.dimension import Dimension
-    from dimensions.testing import make_fixture_protocol
+    from dimensions.testing import evaluate_tests
+    from dimensions.validate import validate_envelope
 
-    if scenario.protocol != "browser":
-        raise ValueError(
-            f"scenario {scenario.name!r}: protocol {scenario.protocol!r} "
-            f"not yet supported by `scenarios run` (only `browser` today)"
-        )
-
-    proto = make_fixture_protocol(scenario.protocol, scenario.fixture)
-    # Default to the fixture's own URL so the produced envelope's subject
-    # matches where the fixture purports to come from (relevant when
-    # the scenario uses ${...} substitution against config.urls).
-    fallback_url = scenario.fixture.get("url") or "https://fixture.test/"
-    urls = scenario.expectations.get("urls") or {"main": fallback_url}
-    plugin = plugin_class(urls=urls, browser=proto)
+    # Build the plugin from config, overriding `urls` so the only URL
+    # captured is the one declared in the scenario. Everything else
+    # (viewport, timeout, wait policy, …) flows through unchanged.
+    kwargs = dict(plugin_cfg)
+    kwargs["urls"] = {"main": scenario.url}
+    # Wait for every test target to appear before capturing — the
+    # scenario already names what must be present, so re-purposing
+    # those UIPaths as Playwright readiness signals is free.
+    scenario_waits = _wait_selectors_from_tests(scenario)
+    if scenario_waits:
+        existing = kwargs.get("wait_for_selector")
+        if existing:
+            if isinstance(existing, str):
+                kwargs["wait_for_selector"] = [existing, *scenario_waits]
+            else:
+                kwargs["wait_for_selector"] = [*existing, *scenario_waits]
+        else:
+            kwargs["wait_for_selector"] = scenario_waits
+    plugin = plugin_class(**kwargs)
     dimension = Dimension(plugin, name=scenario.plugin)
     result = asyncio.run(dimension.collect())
+
+    nonempty = [e for e in result.envelopes if e.get("observations")]
 
     provenance = {
         "kind":   "scenario",
@@ -1000,15 +993,234 @@ def _run_and_persist_scenario(
         except ValueError:
             provenance["path"] = str(source_path)
 
-    label = scenario.name
-    for envelope in result.envelopes:
+    # Evaluate `tests` against the live captured walk, then attach the
+    # results as observations on the primary (tree) envelope.
+    evaluation = evaluate_tests(scenario, nonempty)
+    primary = _pick_primary_envelope(nonempty)
+    if primary is not None:
+        _attach_test_evidence(primary, evaluation, scenario)
+        validate_envelope(primary)
+
+    label = label if label is not None else scenario.name
+    for envelope in nonempty:
+        env_name = envelope["envelope_name"]
+        if namespace_envelopes:
+            env_name = f"{scenario.name}.{env_name}"
+            envelope["envelope_name"] = env_name
         envelope["provenance"] = dict(provenance)
-        dims.backend.save(
-            scenario.plugin, label, envelope["envelope_name"], envelope,
-        )
+        dims.backend.save(scenario.plugin, label, env_name, envelope)
     for sha, (content, ext, _mime) in result.pending_assets.items():
         dims.backend.save_asset(scenario.plugin, label, sha, ext, content)
-    return len(result.envelopes)
+    return len(nonempty)
+
+
+def _pick_primary_envelope(envelopes):
+    """Pick the envelope the scenario assertion observations attach to.
+
+    Prefer the tree envelope (`*.tree`); fall back to the first non-empty.
+    """
+    for env in envelopes:
+        if (env.get("envelope_name") or "").endswith(".tree"):
+            return env
+    return envelopes[0] if envelopes else None
+
+
+def _attach_test_evidence(envelope, evaluation, scenario):
+    """Append rule_check observations capturing test results.
+
+    - one ``scenario.test.<name>`` per test in ``scenario.tests``
+    - one ``scenario.assertions`` rollup across all tests
+    - one ``scenario.target_stability`` distribution (STRONG/MEDIUM/WEAK)
+    """
+    obs = envelope.setdefault("observations", [])
+
+    for t in evaluation["tests"]:
+        violations_sample = [
+            c["detail"] or f"{c['uipath']} {c['detail']}"
+            for c in t["checks"] if not c["passed"]
+        ][:10]
+        obs.append({
+            "id":                f"scenario.test.{t['name']}",
+            "kind":              "rule_check",
+            "label":             f"Test `{t['name']}` (scenario `{scenario.name}`)",
+            "passed":            t["passed"],
+            "checked_count":     t["checked"],
+            "violations_count":  len(t["violations"]),
+            "violations_sample": violations_sample,
+        })
+
+    obs.append({
+        "id":                "scenario.assertions",
+        "kind":              "rule_check",
+        "label":             f"All tests passed for scenario `{scenario.name}`",
+        "passed":            evaluation["passed"],
+        "checked_count":     evaluation["checked"],
+        "violations_count":  len(evaluation["violations"]),
+        "violations_sample": list(evaluation["violations"])[:10],
+    })
+
+    stab = evaluation["stability"]
+    if any(stab.values()):
+        obs.append({
+            "id":      "scenario.target_stability",
+            "kind":    "distribution",
+            "label":   "Test target stability tiers",
+            "buckets": {k: v for k, v in stab.items() if v},
+        })
+
+
+def _wait_selectors_from_tests(scenario) -> List[str]:
+    """Derive a list of Playwright/CSS selectors from scenario.tests
+    UIPaths, so capture waits for every target element to be visible
+    before grabbing the screenshot.
+
+    Uses only the LAST segment of each UIPath — the strongest anchor
+    (testid / id) is enough for "wait until present". Falls back to
+    the leaf tag if no strong anchor exists.
+    """
+    from dimensions.uipath import parse
+    from dimensions.uipath.grammar import SelectorKind
+
+    out: List[str] = []
+    seen: set = set()
+    for assertions in (scenario.tests or {}).values():
+        for uipath_str in assertions.keys():
+            try:
+                p = parse(uipath_str)
+            except Exception:  # noqa: BLE001
+                continue
+            if not p.segments:
+                continue
+            leaf = p.segments[-1]
+            sel = None
+            for s in leaf.selectors:
+                if s.kind == SelectorKind.TESTID:
+                    sel = f'[data-testid="{s.value}"]'
+                    break
+                if s.kind == SelectorKind.ID:
+                    sel = f"#{s.value}"
+                    break
+            if sel is None:
+                sel = leaf.tag
+            if sel and sel not in seen:
+                seen.add(sel)
+                out.append(sel)
+    return out
+
+
+def _envelope_group_key(envelope: Dict[str, Any], fallback_name: str) -> str:
+    """Group key for related envelopes in one HTML page.
+
+    Visual plugin emits ``<scenario>.<urlkey>.tree`` and
+    ``<scenario>.<urlkey>.screenshot`` per URL; both should render
+    into one report. Strip the trailing ``.tree`` / ``.screenshot``
+    suffix to find the shared prefix.
+    """
+    SUFFIXES = (".tree", ".screenshot")
+    for suffix in SUFFIXES:
+        if fallback_name.endswith(suffix):
+            return fallback_name[: -len(suffix)]
+    return fallback_name
+
+
+def _envelope_test_result(envelope: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Pull the scenario.assertions observation out of an envelope, if
+    present. Returns ``{passed, checked, violations}`` or None."""
+    for obs in envelope.get("observations", []):
+        if obs.get("id") == "scenario.assertions":
+            return {
+                "passed":  bool(obs.get("passed")),
+                "checked": obs.get("checked_count", 0),
+                "violations": obs.get("violations_count", 0),
+            }
+    return None
+
+
+def _build_label_index_html(
+    dim_name: str, label: str, rows: List[Dict[str, Any]],
+) -> str:
+    """Build the per-label index.html with prominent pass/fail badges."""
+    from html import escape as _esc
+
+    passed = sum(1 for r in rows if r["result"] and r["result"]["passed"])
+    failed = sum(
+        1 for r in rows if r["result"] and not r["result"]["passed"]
+    )
+    no_result = sum(1 for r in rows if r["result"] is None)
+    total = len(rows)
+
+    summary_chips = []
+    if passed:
+        summary_chips.append(
+            f'<span class="chip pass">{passed}/{total} passed</span>'
+        )
+    if failed:
+        summary_chips.append(
+            f'<span class="chip fail">{failed} failed</span>'
+        )
+    if no_result:
+        summary_chips.append(
+            f'<span class="chip info">{no_result} other</span>'
+        )
+
+    rows_html: List[str] = []
+    for r in rows:
+        env = r["env_name"]
+        result = r["result"]
+        scenario = r["scenario"]
+        if result is None:
+            badge = '<span class="chip info">no test</span>'
+            detail = ""
+        elif result["passed"]:
+            badge = '<span class="chip pass">✓ pass</span>'
+            detail = (
+                f'<span class="detail">{result["checked"]} checked</span>'
+            )
+        else:
+            badge = '<span class="chip fail">✗ fail</span>'
+            detail = (
+                f'<span class="detail">'
+                f'{result["violations"]} violation(s) · '
+                f'{result["checked"]} checked</span>'
+            )
+        scen_html = (
+            f'<span class="meta">scenario <code>{_esc(scenario)}</code></span>'
+            if scenario else ""
+        )
+        rows_html.append(
+            f'<li>{badge}<a href="{_esc(env)}.html">{_esc(env)}</a>'
+            f' {scen_html} {detail}</li>'
+        )
+
+    return (
+        "<!doctype html><html lang=en><head><meta charset=utf-8>"
+        "<meta name=viewport content='width=device-width,initial-scale=1'>"
+        f"<title>{_esc(dim_name)} / {_esc(label)}</title>"
+        "<style>"
+        "body{font:16px/1.5 system-ui,sans-serif;max-width:780px;"
+        "margin:2rem auto;padding:1rem;color:#1f2937;}"
+        "h1{margin:0 0 .5rem;}"
+        ".summary{margin-bottom:1.2rem;}"
+        ".chip{display:inline-block;padding:.1em .6em;border-radius:.4em;"
+        "font-size:.85rem;font-weight:600;margin-right:.4em;color:#fff;}"
+        ".chip.pass{background:#22c55e;}"
+        ".chip.fail{background:#ef4444;}"
+        ".chip.info{background:#3b82f6;}"
+        "ul{list-style:none;padding:0;margin:0;}"
+        "li{display:flex;align-items:center;gap:.5rem;padding:.6rem .8rem;"
+        "margin:.4rem 0;border:1px solid #e5e7eb;border-radius:.5rem;"
+        "background:#fff;flex-wrap:wrap;}"
+        "li a{color:#2563eb;text-decoration:none;font-weight:600;}"
+        "li a:hover{text-decoration:underline;}"
+        ".meta{color:#6b7280;font-size:.9rem;}"
+        ".detail{color:#6b7280;font-size:.85rem;margin-left:auto;}"
+        "code{font:.9em/1.4 ui-monospace,Menlo,Consolas,monospace;}"
+        "</style></head><body>"
+        f"<h1>{_esc(dim_name)} / {_esc(label)}</h1>"
+        f'<div class="summary">{" ".join(summary_chips)}</div>'
+        f'<ul>{"".join(rows_html)}</ul>'
+        "</body></html>"
+    )
 
 
 def _scenario_paths(roots) -> Dict[tuple, Path]:

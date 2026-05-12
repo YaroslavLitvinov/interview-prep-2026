@@ -1,186 +1,130 @@
-"""Scenario / Step validation — typed UIPath targets, resolve guard."""
+"""Scenario model + evaluator unit tests."""
 
 from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
 
-from dimensions.testing.scenarios import Scenario
-from dimensions.uipath import UIPath, format_uipath
+from dimensions.testing.scenarios import (
+    Scenario, evaluate_tests, resolve_scenario_urls,
+    UnresolvedScenarioVar,
+)
 
 
-# ── valid case ────────────────────────────────────────────────────────────
+# ── parsing ────────────────────────────────────────────────────────────────
 
 
-def _login_fixture() -> dict:
-    return {
-        "url": "https://fixture.test/login",
-        "dom_walk": {
-            "html>body>main>form[testid=login]>input[name=email]": {},
-            "html>body>main>form[testid=login]>input[name=password]": {},
-            "html>body>main>form[testid=login]>button[name=submit]": {
-                "text": "Sign in"
-            },
+def test_minimal_scenario_parses():
+    sc = Scenario.model_validate({
+        "name":   "welcome",
+        "plugin": "visual",
+        "url":    "https://example.test/",
+        "tests":  {
+            "header_check": {
+                "html>body>h1[testid=stHeading]": {"text": "Welcome"}
+            }
         },
+    })
+    assert sc.name == "welcome"
+    assert sc.url == "https://example.test/"
+    assert "header_check" in sc.tests
+
+
+def test_extra_fields_rejected():
+    with pytest.raises(ValidationError):
+        Scenario.model_validate({
+            "name": "x", "plugin": "visual", "url": "x",
+            "fixture": {}, "tests": {},
+        })
+
+
+def test_url_required():
+    with pytest.raises(ValidationError):
+        Scenario.model_validate({"name": "x", "plugin": "visual", "tests": {}})
+
+
+# ── URL substitution ───────────────────────────────────────────────────────
+
+
+def test_url_substitution():
+    sc = Scenario.model_validate({
+        "name": "x", "plugin": "visual",
+        "url": "${home}/page", "tests": {},
+    })
+    out = resolve_scenario_urls(sc, {"home": "http://localhost:8501"})
+    assert out.url == "http://localhost:8501/page"
+
+
+def test_unknown_var_fails():
+    sc = Scenario.model_validate({
+        "name": "x", "plugin": "visual", "url": "${nope}", "tests": {},
+    })
+    with pytest.raises(UnresolvedScenarioVar):
+        resolve_scenario_urls(sc, {"home": "http://x"})
+
+
+# ── evaluator ──────────────────────────────────────────────────────────────
+
+
+def _fake_envelope_with_walk(walk_root):
+    """Build an envelope dict carrying a dom_tree payload."""
+    return {
+        "envelope_name": "main.tree",
+        "observations": [{
+            "id":             "page.dom_tree",
+            "kind":           "payload",
+            "payload_schema": "dom_tree",
+            "data":           {"root": walk_root},
+        }],
     }
 
 
-def test_valid_steps_load_and_targets_are_typed_uipath():
+def test_evaluate_pass():
     sc = Scenario.model_validate({
-        "name": "login_flow",
-        "plugin": "visual",
-        "fixture": _login_fixture(),
-        "steps": [
-            {"action": "type",
-             "target": "html>body>main>form[testid=login]>input[name=email]",
-             "value": "alice@example.com"},
-            {"action": "click",
-             "target": "html>body>main>form[testid=login]>button[name=submit]"},
-        ],
-    })
-    assert all(isinstance(s.target, UIPath) for s in sc.steps)
-    # Round-trip back to canonical string form.
-    assert format_uipath(sc.steps[0].target).endswith("input[name=email]")
-
-
-def test_step_without_target_is_allowed():
-    sc = Scenario.model_validate({
-        "name": "navigation",
-        "plugin": "visual",
-        "fixture": _login_fixture(),
-        "steps": [{"action": "visit", "url": "https://fixture.test/login"}],
-    })
-    assert sc.steps[0].target is None
-
-
-# ── invalid cases ─────────────────────────────────────────────────────────
-
-
-def test_unresolvable_target_fails_at_load():
-    with pytest.raises(ValidationError) as exc:
-        Scenario.model_validate({
-            "name": "bad_target",
-            "plugin": "visual",
-            "fixture": _login_fixture(),
-            "steps": [{
-                "action": "click",
-                "target": "form[testid=nonexistent]>button",
-            }],
-        })
-    assert "does not resolve" in str(exc.value)
-
-
-def test_syntactically_invalid_target_fails_at_parse():
-    with pytest.raises(ValidationError):
-        Scenario.model_validate({
-            "name": "bad_syntax",
-            "plugin": "visual",
-            "fixture": _login_fixture(),
-            "steps": [{"action": "click", "target": "html>>>foo"}],
-        })
-
-
-def test_typo_in_testid_is_caught():
-    """LLM-confabulation guard: a one-letter typo in a testid fails
-    at load, not at run time."""
-    with pytest.raises(ValidationError) as exc:
-        Scenario.model_validate({
-            "name": "typo_scenario",
-            "plugin": "visual",
-            "fixture": _login_fixture(),
-            "steps": [{
-                "action": "click",
-                "target": "html>body>main>form[testid=loign]>button[name=submit]",
-            }],
-        })
-    assert "does not resolve" in str(exc.value)
-
-
-# ── stability surfacing ───────────────────────────────────────────────────
-
-
-def test_target_stability_strong_for_testid_path():
-    sc = Scenario.model_validate({
-        "name": "stable",
-        "plugin": "visual",
-        "fixture": _login_fixture(),
-        "steps": [{
-            "action": "click",
-            "target": "html>body>main>form[testid=login]>button[name=submit]",
-        }],
-    })
-    assert sc.target_stability() == {0: "strong"}
-
-
-# ── serialization round-trip ──────────────────────────────────────────────
-
-
-# ── expect step execution ─────────────────────────────────────────────────
-
-
-def test_expect_text_fires_on_mismatch():
-    """A scenario whose expect_text disagrees with the fixture's text
-    must fail at run, not silently pass."""
-    import asyncio
-    from dimensions.testing import run_scenario
-    from plugins.visual import VisualPlugin
-
-    sc = Scenario.model_validate({
-        "name": "expect_mismatch",
-        "plugin": "visual",
-        "fixture": {
-            "url": "https://fixture.test/x",
-            "dom_walk": {
-                "html>body>div[testid=greet]": {"text": "Hello"}
-            },
+        "name": "x", "plugin": "visual", "url": "http://x",
+        "tests": {
+            "t1": {"html>body>div[testid=greet]": {"text": "Hello"}},
         },
-        "steps": [{
-            "action": "expect_text",
-            "target": "html>body>div[testid=greet]",
-            "value": "Goodbye",
-        }],
     })
-    with pytest.raises(AssertionError) as exc:
-        asyncio.run(run_scenario(sc, VisualPlugin))
-    assert "expect_text" in str(exc.value)
-    assert "Hello" in str(exc.value)
-    assert "Goodbye" in str(exc.value)
+    tree = {"tag": "html", "children": [
+        {"tag": "body", "children": [
+            {"tag": "div", "attributes": {"data-testid": "greet"},
+             "text": "Hello", "children": []},
+        ]},
+    ]}
+    result = evaluate_tests(sc, [_fake_envelope_with_walk(tree)])
+    assert result["passed"] is True
+    assert result["tests"][0]["passed"] is True
 
 
-def test_expect_visible_fires_when_hidden():
-    import asyncio
-    from dimensions.testing import run_scenario
-    from plugins.visual import VisualPlugin
-
+def test_evaluate_text_mismatch():
     sc = Scenario.model_validate({
-        "name": "expect_hidden",
-        "plugin": "visual",
-        "fixture": {
-            "url": "https://fixture.test/x",
-            "dom_walk": {
-                "html>body>div[testid=hidden]": {"visible": False}
-            },
+        "name": "x", "plugin": "visual", "url": "http://x",
+        "tests": {
+            "t1": {"html>body>div[testid=greet]": {"text": "Goodbye"}},
         },
-        "steps": [{
-            "action": "expect_visible",
-            "target": "html>body>div[testid=hidden]",
-        }],
     })
-    with pytest.raises(AssertionError) as exc:
-        asyncio.run(run_scenario(sc, VisualPlugin))
-    assert "expect_visible" in str(exc.value)
+    tree = {"tag": "html", "children": [
+        {"tag": "body", "children": [
+            {"tag": "div", "attributes": {"data-testid": "greet"},
+             "text": "Hello", "children": []},
+        ]},
+    ]}
+    result = evaluate_tests(sc, [_fake_envelope_with_walk(tree)])
+    assert result["passed"] is False
+    assert any("Hello" in v and "Goodbye" in v for v in result["violations"])
 
 
-def test_target_serializes_back_to_string():
+def test_evaluate_uipath_not_found():
     sc = Scenario.model_validate({
-        "name": "serialize",
-        "plugin": "visual",
-        "fixture": _login_fixture(),
-        "steps": [{
-            "action": "click",
-            "target": "html>body>main>form[testid=login]>button[name=submit]",
-        }],
+        "name": "x", "plugin": "visual", "url": "http://x",
+        "tests": {
+            "t1": {"html>body>div[testid=missing]": {"visible": True}},
+        },
     })
-    dumped = sc.model_dump(mode="json")
-    assert isinstance(dumped["steps"][0]["target"], str)
-    assert dumped["steps"][0]["target"].endswith("button[name=submit]")
+    tree = {"tag": "html", "children": [
+        {"tag": "body", "children": []}
+    ]}
+    result = evaluate_tests(sc, [_fake_envelope_with_walk(tree)])
+    assert result["passed"] is False
+    assert any("not found" in v for v in result["violations"])

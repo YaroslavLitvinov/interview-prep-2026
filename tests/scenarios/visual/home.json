@@ -1,0 +1,26 @@
+{
+  "name": "home",
+  "plugin": "visual",
+  "url": "${home}",
+  "tests": {
+    "app_landmarks": {
+      "div[testid=stApp]":              {"visible": true},
+      "section[testid=stMain]":         {"visible": true},
+      "header[testid=stHeader]":        {"visible": true},
+      "section[testid=stSidebar]":      {"visible": true},
+      "button[testid=stMainMenuButton]":{"visible": true}
+    },
+    "page_title": {
+      "html>head>title": {"text": "Interview Prep 2026"}
+    },
+    "primary_headings": {
+      "h1#interview-prep-2026": {"visible": true},
+      "h2#all-topics":          {"visible": true}
+    },
+    "content_sections": {
+      "h3#diagram": {"visible": true},
+      "h3#answer":  {"visible": true},
+      "h3#code":    {"visible": true}
+    }
+  }
+}

@@ -237,32 +237,13 @@ class BaseRenderSchema:
         })
 
     def render_payload_screen_map(self, obs: Dict[str, Any]) -> ReportNode:
-        data = obs.get("data") or {}
-        elements = data.get("elements") or {}
-        # Pre-shape rows so the renderer is dumb: one row per element,
-        # already sorted by UIPath length (top-level → leaves).
-        rows = []
-        for uipath, el in elements.items():
-            rows.append({
-                "uipath":      uipath,
-                "tag":         el.get("tag") or "",
-                "role":        el.get("role") or "",
-                "name":        el.get("accessible_name") or "",
-                "stability":   el.get("stability") or "WEAK",
-                "interactive": bool(el.get("interactive")),
-                "visible":     bool(el.get("visible", True)),
-            })
-        rows.sort(key=lambda r: (r["uipath"].count(">"), r["uipath"]))
-        return ReportNode(type="screen_map", data={
-            "id":               obs.get("id", ""),
-            "label":            obs.get("label", ""),
-            "url":              data.get("url"),
-            "rows":             rows,
-            "element_count":    len(rows),
-            "interactive_count": len(data.get("interactives") or []),
-            "heading_count":    len(data.get("headings") or []),
-            "form_count":       len(data.get("forms") or []),
-        })
+        """The dom_tree's smart-tree view already surfaces every UIPath
+        (click-to-copy on each ancestor card), so a separate screen_map
+        card adds nothing to the rendered report. Return a `hidden`
+        node — renderers skip it. The screen_map *observation* itself
+        stays in the snapshot for the diff layer.
+        """
+        return ReportNode(type="hidden", data={"id": obs.get("id", "")})
 
     def render_payload_unknown(self, obs: Dict[str, Any]) -> ReportNode:
         return ReportNode(type="unknown_payload", data={

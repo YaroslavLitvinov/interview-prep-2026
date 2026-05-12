@@ -136,6 +136,8 @@ class MarkdownRenderer:
 
     def _render_card(self, node: ReportNode) -> List[str]:
         """Render one observation as an H3 card + body."""
+        if node.type == "hidden":
+            return []
         d = node.data if isinstance(node.data, dict) else {}
         obs_id = d.get("id") or "?"
         label  = d.get("label") or obs_id
@@ -300,44 +302,6 @@ class MarkdownRenderer:
             out.append(f"![{label}]({img_src})")
         return out
 
-    # ── screen_map ────────────────────────────────────────────────────
-
-    SCREEN_MAP_ROW_LIMIT = 200
-
-    def render_screen_map(self, node: ReportNode) -> List[str]:
-        d = node.data
-        rows = d.get("rows", [])
-        chips = []
-        if d.get("interactive_count"):
-            chips.append(f"{d['interactive_count']} interactive")
-        if d.get("heading_count"):
-            chips.append(f"{d['heading_count']} headings")
-        if d.get("form_count"):
-            chips.append(f"{d['form_count']} forms")
-        out: List[str] = []
-        if d.get("url"):
-            out.append(f"_url:_ `{d['url']}`")
-        if chips:
-            out.append(" · ".join(chips))
-        if out:
-            out.append("")
-        out += ["| UIPath | Role | Name | Tier |", "|---|---|---|---|"]
-        for r in rows[: self.SCREEN_MAP_ROW_LIMIT]:
-            tier_raw = str(r.get("stability") or "weak")
-            tier = tier_raw.upper()
-            glyph = self.TIER_GLYPHS.get(tier, "⚪")
-            name = r.get("name") or "–"
-            role = r.get("role") or "–"
-            out.append(
-                f"| `{r['uipath']}` | {role} | "
-                f"{self._escape_md(name)} | {glyph} {tier} |"
-            )
-        if len(rows) > self.SCREEN_MAP_ROW_LIMIT:
-            out.append(
-                f"| _… +{len(rows) - self.SCREEN_MAP_ROW_LIMIT:,} more_ "
-                f"| | | |"
-            )
-        return out
 
     @staticmethod
     def _escape_md(s: str) -> str:
@@ -563,6 +527,9 @@ class MarkdownRenderer:
 
     def render_unknown(self, node: ReportNode) -> List[str]:
         return [f"- ? **{node.type}** (unhandled IR node type)"]
+
+    def render_hidden(self, node: ReportNode) -> List[str]:
+        return []
 
     # ── helpers ───────────────────────────────────────────────────────
 

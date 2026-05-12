@@ -1,48 +1,32 @@
-"""Plugin self-testing: fixture protocols, scenarios, generic properties.
+"""Plugin self-testing: scenarios + URL substitution + test evaluation.
 
-Plugins are exercised the same way real captures exercise them — through
-their `InjectionProtocol` seam — except the protocol is replaced by a
-fixture replay that returns pre-recorded state. Generic properties then
-assert the framework's universal contracts on the produced envelopes.
+Scenarios are live-driven: a URL is loaded through the plugin's real
+protocol, then ``tests`` declarations are evaluated against the
+captured DOM walk.
 
 Public surface:
 
-    Scenario / Step          — Pydantic models for a fixture + steps + expectations
-    discover()                — find scenarios on disk
-    run_scenario()            — execute one scenario through a real plugin
-    assert_generic()          — assert framework-level invariants on envelopes
-    FixtureBrowserProtocol    — replay a PageState
-    make_fixture_protocol()   — pick the right fixture protocol for a Scenario
+    Scenario / discover()       — Pydantic model + on-disk discovery
+    resolve_scenario_urls()     — ${name} substitution against config.urls
+    evaluate_tests()            — run test assertions against captured envelopes
+    UnresolvedScenarioVar       — raised when ${name} isn't in the URL map
+    ScenarioCollision           — raised when two scenarios share (plugin, name)
 """
 
-from dimensions.testing.protocols import (
-    FixtureBrowserProtocol,
-    make_fixture_protocol,
-    normalize_dom_walk,
-)
 from dimensions.testing.scenarios import (
     Scenario,
-    Step,
+    ScenarioCollision,
     UnresolvedScenarioVar,
     discover,
+    evaluate_tests,
     resolve_scenario_urls,
-    run_scenario,
-)
-from dimensions.testing.properties import (
-    assert_generic,
-    assert_expectations,
 )
 
 __all__ = [
-    "FixtureBrowserProtocol",
     "Scenario",
-    "Step",
+    "ScenarioCollision",
     "UnresolvedScenarioVar",
-    "assert_expectations",
-    "assert_generic",
     "discover",
-    "make_fixture_protocol",
-    "normalize_dom_walk",
+    "evaluate_tests",
     "resolve_scenario_urls",
-    "run_scenario",
 ]
