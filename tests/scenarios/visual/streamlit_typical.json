@@ -3,7 +3,7 @@
   "plugin": "visual",
   "protocol": "browser",
   "fixture": {
-    "url": "https://fixture.test/app",
+    "url": "${home}",
     "title": "Streamlit",
     "dom_walk": {
       "html>body>div#root[testid=stApp]>div[testid=stHeading]": {"text": "Welcome"}

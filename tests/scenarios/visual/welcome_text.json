@@ -1,0 +1,21 @@
+{
+  "name": "welcome_text",
+  "plugin": "visual",
+  "protocol": "browser",
+  "fixture": {
+    "url": "${home}",
+    "title": "Welcome",
+    "dom_walk": {
+      "html>body>main[testid=stApp]>div[testid=stHeading]": {"text": "Welcome to Dimensions"}
+    }
+  },
+  "steps": [
+    {"action": "expect_text",
+     "target": "html>body>main[testid=stApp]>div[testid=stHeading]",
+     "value": "Welcome to Dimensions"}
+  ],
+  "expectations": {
+    "envelopes": ["main.tree"],
+    "observations_must_include": ["page.dom_tree", "page.screen_map"]
+  }
+}

@@ -48,6 +48,7 @@ class BaseRenderSchema:
                 "category":      envelope.get("category", "?"),
                 "captured_at":   envelope.get("captured_at", "?"),
                 "subject":       envelope.get("subject") or {},
+                "provenance":    envelope.get("provenance"),
             },
             children=[
                 self.render_observation(o)
@@ -194,6 +195,7 @@ class BaseRenderSchema:
         method_map = {
             "screenshot": self.render_payload_screenshot,
             "dom_tree":   self.render_payload_dom_tree,
+            "screen_map": self.render_payload_screen_map,
         }
         method = method_map.get(schema, self.render_payload_unknown)
         return method(obs)
@@ -232,6 +234,34 @@ class BaseRenderSchema:
             "filter":         data.get("filter"),
             "with_hierarchy": data.get("with_hierarchy", False),
             "skipped":        data.get("skipped") or [],
+        })
+
+    def render_payload_screen_map(self, obs: Dict[str, Any]) -> ReportNode:
+        data = obs.get("data") or {}
+        elements = data.get("elements") or {}
+        # Pre-shape rows so the renderer is dumb: one row per element,
+        # already sorted by UIPath length (top-level → leaves).
+        rows = []
+        for uipath, el in elements.items():
+            rows.append({
+                "uipath":      uipath,
+                "tag":         el.get("tag") or "",
+                "role":        el.get("role") or "",
+                "name":        el.get("accessible_name") or "",
+                "stability":   el.get("stability") or "WEAK",
+                "interactive": bool(el.get("interactive")),
+                "visible":     bool(el.get("visible", True)),
+            })
+        rows.sort(key=lambda r: (r["uipath"].count(">"), r["uipath"]))
+        return ReportNode(type="screen_map", data={
+            "id":               obs.get("id", ""),
+            "label":            obs.get("label", ""),
+            "url":              data.get("url"),
+            "rows":             rows,
+            "element_count":    len(rows),
+            "interactive_count": len(data.get("interactives") or []),
+            "heading_count":    len(data.get("headings") or []),
+            "form_count":       len(data.get("forms") or []),
         })
 
     def render_payload_unknown(self, obs: Dict[str, Any]) -> ReportNode:

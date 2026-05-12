@@ -184,7 +184,7 @@ async def test_smoke_generates_reports_for_every_supported_dimension(
                     render_envelope_markdown(envelope, asset_loader=loader)
                 )
                 text = out_path.read_text()
-                assert text.startswith("## Dimension:"), (
+                assert text.startswith("# `"), (
                     f"envelope render missing markdown header in {out_path}"
                 )
 

@@ -1335,6 +1335,67 @@ class HtmlRenderer:
             required=node.required,
         )
 
+    # ── screen_map ────────────────────────────────────────────────────
+
+    SCREEN_MAP_ROW_LIMIT = 500
+
+    TIER_GLYPHS = {
+        "STRONG": "🟢",
+        "MEDIUM": "🟡",
+        "WEAK":   "🔴",
+    }
+
+    def render_screen_map(self, node: ReportNode) -> str:
+        d = node.data
+        rows = d.get("rows", [])
+        chips_html = []
+        if d.get("url"):
+            chips_html.append(
+                f'<span class="meta">url: <code>{esc(d["url"])}</code></span>'
+            )
+        if d.get("interactive_count"):
+            chips_html.append(
+                f'<span class="meta">{d["interactive_count"]} interactive</span>'
+            )
+        if d.get("heading_count"):
+            chips_html.append(
+                f'<span class="meta">{d["heading_count"]} headings</span>'
+            )
+        if d.get("form_count"):
+            chips_html.append(
+                f'<span class="meta">{d["form_count"]} forms</span>'
+            )
+
+        body_rows = []
+        for r in rows[: self.SCREEN_MAP_ROW_LIMIT]:
+            tier_raw = str(r.get("stability") or "weak").upper()
+            glyph = self.TIER_GLYPHS.get(tier_raw, "⚪")
+            role = r.get("role") or "–"
+            name = r.get("name") or "–"
+            tier_cell = f"{glyph} {esc(tier_raw)}"
+            body_rows.append((
+                f"<code>{esc(r['uipath'])}</code>",
+                esc(str(role)),
+                esc(str(name)),
+                tier_cell,
+            ))
+
+        title = (
+            f"{esc(d['label'])} "
+            f"<span class=\"meta\">({d['element_count']} elements)</span>"
+        )
+        if chips_html:
+            title = title + " " + " ".join(chips_html)
+        return self._table_card(
+            obs_id=d.get("id"),
+            title=title,
+            columns=["UIPath", "Role", "Name", "Tier"],
+            rows=body_rows,
+            extra_count=max(0, len(rows) - self.SCREEN_MAP_ROW_LIMIT),
+            filterable=True,
+            required=node.required,
+        )
+
     # ── side-by-side diff renderers ──────────────────────────────────
 
     def render_comparison_envelope(self, node: ReportNode) -> str:

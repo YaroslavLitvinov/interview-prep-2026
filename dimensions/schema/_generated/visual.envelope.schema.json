@@ -1,5 +1,47 @@
 {
   "$defs": {
+    "Provenance": {
+      "additionalProperties": false,
+      "description": "Origin marker for an envelope.\n\nOptional on every envelope \u2014 live captures leave it unset. Replay\nruns (``dimensions <dim> scenarios run``) stamp it with the\nscenario that produced the envelope so renderers can surface\n``This came from scenario X`` without having to match URLs after\nthe fact.",
+      "properties": {
+        "kind": {
+          "const": "scenario",
+          "default": "scenario",
+          "description": "What produced this envelope. Today only `scenario`; more kinds (replay-of-replay, llm-discovery, \u2026) later.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "description": "Scenario name.",
+          "title": "Name",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Source file the scenario was loaded from (relative).",
+          "title": "Path"
+        },
+        "plugin": {
+          "description": "Plugin the scenario targets.",
+          "title": "Plugin",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "plugin"
+      ],
+      "title": "Provenance",
+      "type": "object"
+    },
     "UrlSubject": {
       "additionalProperties": false,
       "description": "Subject schema for the Visual dimension \u2014 a renderable URL.",
@@ -128,6 +170,18 @@
       },
       "title": "Observations",
       "type": "array"
+    },
+    "provenance": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Provenance"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Origin marker (scenario replay, \u2026). Unset on live captures."
     },
     "subject": {
       "$ref": "#/$defs/UrlSubject"

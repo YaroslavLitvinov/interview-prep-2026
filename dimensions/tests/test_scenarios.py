@@ -115,6 +115,62 @@ def test_target_stability_strong_for_testid_path():
 # ── serialization round-trip ──────────────────────────────────────────────
 
 
+# ── expect step execution ─────────────────────────────────────────────────
+
+
+def test_expect_text_fires_on_mismatch():
+    """A scenario whose expect_text disagrees with the fixture's text
+    must fail at run, not silently pass."""
+    import asyncio
+    from dimensions.testing import run_scenario
+    from plugins.visual import VisualPlugin
+
+    sc = Scenario.model_validate({
+        "name": "expect_mismatch",
+        "plugin": "visual",
+        "fixture": {
+            "url": "https://fixture.test/x",
+            "dom_walk": {
+                "html>body>div[testid=greet]": {"text": "Hello"}
+            },
+        },
+        "steps": [{
+            "action": "expect_text",
+            "target": "html>body>div[testid=greet]",
+            "value": "Goodbye",
+        }],
+    })
+    with pytest.raises(AssertionError) as exc:
+        asyncio.run(run_scenario(sc, VisualPlugin))
+    assert "expect_text" in str(exc.value)
+    assert "Hello" in str(exc.value)
+    assert "Goodbye" in str(exc.value)
+
+
+def test_expect_visible_fires_when_hidden():
+    import asyncio
+    from dimensions.testing import run_scenario
+    from plugins.visual import VisualPlugin
+
+    sc = Scenario.model_validate({
+        "name": "expect_hidden",
+        "plugin": "visual",
+        "fixture": {
+            "url": "https://fixture.test/x",
+            "dom_walk": {
+                "html>body>div[testid=hidden]": {"visible": False}
+            },
+        },
+        "steps": [{
+            "action": "expect_visible",
+            "target": "html>body>div[testid=hidden]",
+        }],
+    })
+    with pytest.raises(AssertionError) as exc:
+        asyncio.run(run_scenario(sc, VisualPlugin))
+    assert "expect_visible" in str(exc.value)
+
+
 def test_target_serializes_back_to_string():
     sc = Scenario.model_validate({
         "name": "serialize",

@@ -4,6 +4,19 @@
       "additionalProperties": false,
       "description": "A binary property (passed/failed, present/missing).",
       "properties": {
+        "entity_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Content-derived stable entity id assigned by the framework. Comments and resolutions anchor to this; survives recapture.",
+          "title": "Entity Id"
+        },
         "id": {
           "description": "Stable identifier for the observation.",
           "title": "Id",
@@ -49,6 +62,19 @@
           },
           "title": "Buckets",
           "type": "object"
+        },
+        "entity_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Content-derived stable entity id assigned by the framework. Comments and resolutions anchor to this; survives recapture.",
+          "title": "Entity Id"
         },
         "id": {
           "description": "Stable identifier for the observation.",
@@ -104,6 +130,19 @@
       "additionalProperties": false,
       "description": "A frequency table; only the top-N items are kept.",
       "properties": {
+        "entity_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Content-derived stable entity id assigned by the framework. Comments and resolutions anchor to this; survives recapture.",
+          "title": "Entity Id"
+        },
         "id": {
           "description": "Stable identifier for the observation.",
           "title": "Id",
@@ -161,6 +200,19 @@
           "description": "Schema-specific payload \u2014 opaque to the framework.",
           "title": "Data"
         },
+        "entity_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Content-derived stable entity id assigned by the framework. Comments and resolutions anchor to this; survives recapture.",
+          "title": "Entity Id"
+        },
         "id": {
           "description": "Stable identifier for the observation.",
           "title": "Id",
@@ -177,7 +229,7 @@
           "type": "string"
         },
         "payload_schema": {
-          "description": "Discriminator naming the shape of `data`. Recognised values (e.g., 'html', 'elements', 'layered', 'interactive', 'accessibility_tree', 'screenshot', 'comparison') get first-class diff/render; unknown values fall back to a generic JSON dump.",
+          "description": "Discriminator naming the shape of `data`. Recognised values ('dom_tree', 'screenshot', 'comparison') get first-class diff/render; unknown values fall back to a generic JSON dump.",
           "title": "Payload Schema",
           "type": "string"
         },
@@ -212,6 +264,19 @@
           ],
           "default": null,
           "title": "Checked Count"
+        },
+        "entity_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Content-derived stable entity id assigned by the framework. Comments and resolutions anchor to this; survives recapture.",
+          "title": "Entity Id"
         },
         "id": {
           "description": "Stable identifier for the observation.",
@@ -262,6 +327,19 @@
       "additionalProperties": false,
       "description": "A single named value (count, latency, size, named string, etc.).",
       "properties": {
+        "entity_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Content-derived stable entity id assigned by the framework. Comments and resolutions anchor to this; survives recapture.",
+          "title": "Entity Id"
+        },
         "id": {
           "description": "Stable identifier for the observation.",
           "title": "Id",
@@ -312,6 +390,19 @@
       "additionalProperties": false,
       "description": "An unordered, deduplicated collection (inventory).",
       "properties": {
+        "entity_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Content-derived stable entity id assigned by the framework. Comments and resolutions anchor to this; survives recapture.",
+          "title": "Entity Id"
+        },
         "id": {
           "description": "Stable identifier for the observation.",
           "title": "Id",

@@ -328,9 +328,23 @@ class SmartDocument(RenderableModel):
             return []
         lines = ["## Contents", ""]
         for child in self.children.values():
-            lines.append(f"- [{child.label}](#{_heading_anchor(child.label)})")
+            self._append_toc_entries(child, level=0, lines=lines)
         lines.append("")
         return lines
+
+    def _append_toc_entries(
+        self, node: "SmartDocument", level: int, lines: List[str],
+    ) -> None:
+        """Recursively append TOC entries for `node` and all its descendants.
+        Indentation follows markdown's nested-list convention (two spaces
+        per level), so every renderer that supports nested lists shows
+        the same hierarchy."""
+        indent = "  " * level
+        lines.append(
+            f"{indent}- [{node.label}](#{_heading_anchor(node.label)})"
+        )
+        for sub in node.children.values():
+            self._append_toc_entries(sub, level + 1, lines)
 
     def _render_as_section(self, level: int) -> List[str]:
         """Render this SmartDocument as a nested section under a parent."""

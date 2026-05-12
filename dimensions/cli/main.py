@@ -64,6 +64,9 @@ _DIM_COMMANDS = {
     "render-html",
     "render-md",
     "render-diff",
+    "capture-to-fixture",
+    "comment",
+    "scenarios",
 }
 
 _GLOBAL_COMMANDS: set[str] = set()  # reserved for future non-dim ops, none today
@@ -798,6 +801,48 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    p_fix = sub.add_parser(
+        "capture-to-fixture",
+        help="Convert a captured snapshot envelope into a compact "
+             "UIPath-keyed fixture JSON",
+    )
+    p_fix.add_argument("label", help="Snapshot label to read from")
+    p_fix.add_argument("envelope",
+        help="Envelope name to convert (e.g. home.tree)")
+    p_fix.add_argument(
+        "--out", default=None,
+        help="Output path. Default: tests/scenarios/<dim>/<name>.json",
+    )
+    p_fix.add_argument(
+        "--name", default=None,
+        help="Scenario name (defaults to <label>_<envelope>)",
+    )
+    p_fix.add_argument(
+        "--trim", default="meaningful",
+        choices=("all", "meaningful", "text-only"),
+        help="Filter for which nodes appear in the fixture's dom_walk",
+    )
+
+    p_scn = sub.add_parser(
+        "scenarios",
+        help=(
+            "Run discovered Scenario fixtures and persist their results "
+            "as snapshots (label = scenario name). Use the usual show / "
+            "render-md / render-html commands on those labels afterwards."
+        ),
+    )
+    p_scn.add_argument(
+        "scenario_action", choices=("run", "list"),
+        help="run: execute scenarios and persist envelopes; list: print discovered scenarios",
+    )
+    p_scn.add_argument(
+        "scenario_name", nargs="?", default=None,
+        help=(
+            "Specific scenario to run (matches `name` or `plugin/name`). "
+            "Omit to run every discovered scenario."
+        ),
+    )
+
     p_comment = sub.add_parser(
         "comment",
         help="Add / resolve / list comments on a snapshot label",
@@ -831,6 +876,299 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     return parser
+
+
+def cmd_scenarios(args: argparse.Namespace) -> int:
+    """Drive every (or one) discovered Scenario through its plugin via a
+    fixture protocol, then persist the produced envelopes as regular
+    snapshots under label = scenario name.
+
+    Reuses the live-capture machinery (`Dimension.collect()`) so replay
+    envelopes are byte-identical in shape to real captures — they
+    validate against the same schema, get stamped with `captured_at`,
+    stage assets the same way, and render via every existing command
+    without any special case.
+    """
+    from dimensions.config import Config
+    from dimensions.dimension import Dimension
+    from dimensions.testing import (
+        UnresolvedScenarioVar, discover,
+        make_fixture_protocol, resolve_scenario_urls,
+    )
+
+    cfg = Config.from_file(Path(args.config))
+    dims = _build_dims(Path(args.config))
+    plugin_classes = cfg.plugin_classes()
+
+    # Discovery with paths so each envelope can record where it came from.
+    scenarios = discover(roots=cfg.scenario_roots)
+    paths_by_key = _scenario_paths(cfg.scenario_roots)
+    if args.dim:
+        scenarios = [s for s in scenarios if s.plugin == args.dim]
+    if args.scenario_name:
+        scenarios = [
+            s for s in scenarios
+            if s.name == args.scenario_name
+            or f"{s.plugin}/{s.name}" == args.scenario_name
+        ]
+        if not scenarios:
+            print(
+                f"scenario {args.scenario_name!r} not found",
+                file=sys.stderr,
+            )
+            return 1
+
+    if args.scenario_action == "list":
+        for s in scenarios:
+            print(f"{s.plugin}/{s.name}")
+        return 0
+
+    # action == "run"
+    if not scenarios:
+        print("No scenarios discovered.", file=sys.stderr)
+        return 1
+
+    failures = 0
+    for s in scenarios:
+        plugin_cls = plugin_classes.get(s.plugin)
+        if plugin_cls is None:
+            print(
+                f"⚠️  {s.plugin}/{s.name}: plugin not registered in config "
+                f"({sorted(plugin_classes)})",
+                file=sys.stderr,
+            )
+            failures += 1
+            continue
+        try:
+            resolved = resolve_scenario_urls(s, cfg.plugin_urls(s.plugin))
+        except UnresolvedScenarioVar as exc:
+            print(f"❌ {s.plugin}/{s.name}: {exc}", file=sys.stderr)
+            failures += 1
+            continue
+        try:
+            envelope_count = _run_and_persist_scenario(
+                resolved, plugin_cls, dims,
+                source_path=paths_by_key.get((s.plugin, s.name)),
+            )
+        except Exception as exc:  # noqa: BLE001 — surface, don't crash batch
+            print(
+                f"❌ {s.plugin}/{s.name}: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            failures += 1
+            continue
+        print(
+            f"✅ {s.plugin}/{s.name} → "
+            f"label `{s.name}` · {envelope_count} envelope(s)"
+        )
+
+    return 0 if failures == 0 else 1
+
+
+def _run_and_persist_scenario(
+    scenario, plugin_class, dims: Dimensions,
+    *, source_path: Optional[Path] = None,
+) -> int:
+    """Build the fixture-driven plugin, run Dimension.collect(), persist."""
+    from dimensions.dimension import Dimension
+    from dimensions.testing import make_fixture_protocol
+
+    if scenario.protocol != "browser":
+        raise ValueError(
+            f"scenario {scenario.name!r}: protocol {scenario.protocol!r} "
+            f"not yet supported by `scenarios run` (only `browser` today)"
+        )
+
+    proto = make_fixture_protocol(scenario.protocol, scenario.fixture)
+    # Default to the fixture's own URL so the produced envelope's subject
+    # matches where the fixture purports to come from (relevant when
+    # the scenario uses ${...} substitution against config.urls).
+    fallback_url = scenario.fixture.get("url") or "https://fixture.test/"
+    urls = scenario.expectations.get("urls") or {"main": fallback_url}
+    plugin = plugin_class(urls=urls, browser=proto)
+    dimension = Dimension(plugin, name=scenario.plugin)
+    result = asyncio.run(dimension.collect())
+
+    provenance = {
+        "kind":   "scenario",
+        "name":   scenario.name,
+        "plugin": scenario.plugin,
+    }
+    if source_path is not None:
+        try:
+            provenance["path"] = str(source_path.relative_to(Path.cwd()))
+        except ValueError:
+            provenance["path"] = str(source_path)
+
+    label = scenario.name
+    for envelope in result.envelopes:
+        envelope["provenance"] = dict(provenance)
+        dims.backend.save(
+            scenario.plugin, label, envelope["envelope_name"], envelope,
+        )
+    for sha, (content, ext, _mime) in result.pending_assets.items():
+        dims.backend.save_asset(scenario.plugin, label, sha, ext, content)
+    return len(result.envelopes)
+
+
+def _scenario_paths(roots) -> Dict[tuple, Path]:
+    """Re-glob the discovery roots so we know where each scenario lives.
+
+    Discovery returns parsed `Scenario` objects but not their on-disk
+    paths; this small helper rebuilds the (plugin, name) → path index
+    using the same `*.json` rglob so `provenance.path` can point at the
+    source file.
+    """
+    out: Dict[tuple, Path] = {}
+    for r in roots:
+        rp = Path(r)
+        if not rp.is_dir():
+            continue
+        for path in sorted(rp.rglob("*.json")):
+            try:
+                raw = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(raw, dict):
+                continue
+            key = (raw.get("plugin"), raw.get("name"))
+            if all(key):
+                out.setdefault(key, path)
+    return out
+
+
+def cmd_capture_to_fixture(args: argparse.Namespace) -> int:
+    """Extract a UIPath-keyed fixture JSON from a captured snapshot.
+
+    Reads <dim>/<label>/<envelope>.snap.json, walks its `page.dom_tree`
+    payload, derives a canonical UIPath for every node, and emits a
+    fixture matching the compact UIPath-keyed `dom_walk` shape the
+    framework's fixture loader accepts.
+
+    `--trim` filters which nodes appear:
+      * ``meaningful`` (default) — nodes with text, testid, role, name,
+        or an interactive tag (a/button/input/select/textarea/label)
+      * ``all`` — every node in the captured walk
+      * ``text-only`` — nodes with non-empty direct text
+    """
+    import json as _json
+
+    dims = _build_dims(Path(args.config))
+    if not dims.exists(args.dim, args.label):
+        print(f"error: snapshot {args.dim}/{args.label} not found",
+              file=sys.stderr)
+        return 1
+    try:
+        env = dims.load(args.dim, args.label, args.envelope)
+    except SnapshotValidationError as e:
+        print(f"✗ {args.dim}/{args.envelope}: {e}", file=sys.stderr)
+        return 1
+
+    dom_tree = next(
+        (o for o in env.get("observations", [])
+         if o.get("payload_schema") == "dom_tree"), None,
+    )
+    if dom_tree is None:
+        print(f"error: envelope {args.envelope!r} has no dom_tree payload",
+              file=sys.stderr)
+        return 1
+
+    walk = _flatten_dom_tree(dom_tree["data"].get("root"))
+    from dimensions.uipath import derive_all, format_uipath
+    paths = derive_all(walk)
+
+    selected_keys = []
+    selected_props = {}
+    for node in walk:
+        if not _node_is_interesting(node, args.trim):
+            continue
+        key = format_uipath(paths[node["idx"]])
+        props = {}
+        text = (node.get("text") or "").strip()
+        if text:
+            props["text"] = text
+        selected_keys.append(key)
+        selected_props[key] = props
+
+    dom_walk_map = {k: selected_props[k] for k in selected_keys}
+
+    subject = env.get("subject") or {}
+    # The test framework drives a fixture protocol under the URL name
+    # `main`, so an envelope captured as `home.tree` is replayed as
+    # `main.tree`. Translate so the resulting fixture's expectations
+    # match what the replay harness will actually produce.
+    env_suffix = (
+        args.envelope.split(".", 1)[-1] if "." in args.envelope
+        else args.envelope
+    )
+    replayed_envelope = f"main.{env_suffix}"
+    fixture = {
+        "name": args.name or f"{args.label}_{args.envelope}",
+        "plugin": args.dim,
+        "protocol": "browser",
+        "fixture": {
+            "url": subject.get("url", ""),
+            "title": next(
+                (o.get("value") for o in env.get("observations", [])
+                 if o.get("id") == "page.title"), "",
+            ),
+            "dom_walk": dom_walk_map,
+        },
+        "expectations": {
+            "envelopes": [replayed_envelope],
+            "observations_must_include": ["page.dom_tree", "page.screen_map"],
+        },
+    }
+
+    out_path = Path(args.out) if args.out else Path(
+        f"tests/scenarios/{args.dim}/{fixture['name']}.json"
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(_json.dumps(fixture, indent=2) + "\n")
+    _print(
+        f"✓ wrote fixture with {len(dom_walk_map)} elements → {out_path}"
+    )
+    return 0
+
+
+def _flatten_dom_tree(root, parent_idx=-1, out=None):
+    """Recreate a flat dom_walk from a nested dom_tree payload."""
+    if out is None:
+        out = []
+    if root is None:
+        return out
+    idx = len(out)
+    view = {k: v for k, v in root.items() if k != "children"}
+    view["idx"] = idx
+    view["parent"] = parent_idx
+    out.append(view)
+    for child in root.get("children") or []:
+        _flatten_dom_tree(child, idx, out)
+    return out
+
+
+def _node_is_interesting(node, mode: str) -> bool:
+    if mode == "all":
+        return True
+    attrs = node.get("attributes") or {}
+    text = (node.get("text") or "").strip()
+    if mode == "text-only":
+        return bool(text)
+    # default: meaningful
+    if text:
+        return True
+    if attrs.get("data-testid") or attrs.get("data-test-id"):
+        return True
+    if attrs.get("role") or node.get("role"):
+        return True
+    if attrs.get("name"):
+        return True
+    if (node.get("tag") or "").lower() in {
+        "a", "button", "input", "select", "textarea", "label",
+        "h1", "h2", "h3", "h4", "h5", "h6", "form",
+    }:
+        return True
+    return False
 
 
 def cmd_comment(args: argparse.Namespace) -> int:
@@ -893,6 +1231,8 @@ _DISPATCH = {
     "render-md": cmd_render_md,
     "render-diff": cmd_render_diff,
     "comment": cmd_comment,
+    "capture-to-fixture": cmd_capture_to_fixture,
+    "scenarios": cmd_scenarios,
 }
 
 

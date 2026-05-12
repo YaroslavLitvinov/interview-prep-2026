@@ -9,11 +9,36 @@ discriminated union is built. `dimensions/__init__.py` imports
 `dimensions.kinds` first, which in turn imports each kind's schema module.
 """
 
-from typing import Annotated, List, Union
+from typing import Annotated, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from dimensions.schema.observation import Observation
+
+
+class Provenance(BaseModel):
+    """Origin marker for an envelope.
+
+    Optional on every envelope — live captures leave it unset. Replay
+    runs (``dimensions <dim> scenarios run``) stamp it with the
+    scenario that produced the envelope so renderers can surface
+    ``This came from scenario X`` without having to match URLs after
+    the fact.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["scenario"] = Field(
+        default="scenario",
+        description="What produced this envelope. Today only `scenario`; "
+                    "more kinds (replay-of-replay, llm-discovery, …) later.",
+    )
+    name: str = Field(..., description="Scenario name.")
+    plugin: str = Field(..., description="Plugin the scenario targets.")
+    path: Optional[str] = Field(
+        default=None,
+        description="Source file the scenario was loaded from (relative).",
+    )
 
 
 class _EnvelopeBase(BaseModel):
@@ -72,6 +97,10 @@ class _EnvelopeBase(BaseModel):
     dimension: str
     captured_at: str = Field(..., description="ISO-8601 UTC timestamp.")
     observations: List[Observation]
+    provenance: Optional[Provenance] = Field(
+        default=None,
+        description="Origin marker (scenario replay, …). Unset on live captures.",
+    )
 
 
 # ── Discriminated union — assembled lazily after kinds register ─────────────

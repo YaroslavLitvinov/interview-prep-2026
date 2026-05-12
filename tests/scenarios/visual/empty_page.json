@@ -3,7 +3,7 @@
   "plugin": "visual",
   "protocol": "browser",
   "fixture": {
-    "url": "https://fixture.test/empty",
+    "url": "${empty-search}",
     "title": "Empty",
     "dom_walk": {
       "html": {}

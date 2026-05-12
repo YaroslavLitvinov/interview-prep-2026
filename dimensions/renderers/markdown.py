@@ -13,26 +13,6 @@ from typing import Any, Callable, Dict, List, Optional
 from dimensions.render_ir import Attachment, ReportNode
 
 
-def _collect_leaves(
-    root: Optional[Dict[str, Any]],
-) -> List[tuple]:
-    """Walk a dom_tree, return list of (leaf_node, [ancestors_innermost…outermost])."""
-    if root is None:
-        return []
-    out: List[tuple] = []
-
-    def walk(n: Dict[str, Any], anc: List[Dict[str, Any]]) -> None:
-        children = n.get("children") or []
-        if not children:
-            out.append((n, list(reversed(anc))))
-        else:
-            for c in children:
-                walk(c, anc + [n])
-
-    walk(root, [])
-    return out
-
-
 class MarkdownRenderer:
     """ReportNode tree → markdown string.
 
@@ -83,20 +63,145 @@ class MarkdownRenderer:
 
     # ── envelope / comparison roots ──────────────────────────────────
 
+    # Stability tier → glyph. Kept in one place so envelope, screen_map,
+    # and (future) scenario renderers stay visually consistent.
+    TIER_GLYPHS = {
+        "STRONG": "🟢",
+        "MEDIUM": "🟡",
+        "WEAK":   "🔴",
+    }
+
     def render_envelope(self, node: ReportNode) -> List[str]:
         d = node.data
+        attachments_total = sum(
+            len(c.attachments) for c in self._iter_descendants(node)
+        )
+        chips = [
+            f"**Observations:** {len(node.children)}",
+            f"**Attachments:** {attachments_total}",
+            f"**Captured:** `{d['captured_at']}`",
+        ]
         out = [
-            f"## Dimension: `{d['dimension']}` · envelope `{d['envelope_name']}` "
-            f"(category: `{d['category']}`)",
+            f"# `{d['dimension']}` · `{d['envelope_name']}`",
             "",
-            f"- **Captured:** `{d['captured_at']}`",
-            f"- **Subject:** {self._md_subject(d['subject'])}",
+            f"**Subject:** {self._md_subject(d['subject'])}",
+            " · ".join(chips),
             "",
         ]
-        for child in node.children:
-            out.extend(self._render(child))
+
+        # Observations section
+        if node.children:
+            out.append("## Observations")
             out.append("")
+            for child in node.children:
+                out.extend(self._render_card(child))
+                out.append("")
+
+        # Attachments section (flat list across all children)
+        attachments = list(self._iter_attachments(node))
+        if attachments:
+            out.append("## Attachments")
+            out.append("")
+            for att in attachments:
+                ref = att.asset_ref or {}
+                out.append(self._md_attachment_line(att, ref))
+            out.append("")
+
+        # Provenance section — caller may pre-populate node.data["provenance"]
+        prov = d.get("provenance")
+        if prov:
+            out.append("## Provenance")
+            out.append("")
+            out.append(self._md_provenance_line(prov))
+            out.append("")
+
         return out
+
+    # ── card wrapper ─────────────────────────────────────────────────
+
+    # Per-IR-type chip data: (kind label, optional payload schema label).
+    _CARD_CHIPS = {
+        "field":              ("scalar", None),
+        "status_line":        ("boolean", None),
+        "rule_result":        ("rule_check", None),
+        "set_summary":        ("set", None),
+        "distribution_table": ("distribution", None),
+        "histogram_table":    ("histogram", None),
+        "image":              ("payload", "screenshot"),
+        "dom_tree":           ("payload", "dom_tree"),
+        "screen_map":         ("payload", "screen_map"),
+        "unknown_payload":    ("payload", "?"),
+        "unknown_obs":        ("?", None),
+    }
+
+    def _render_card(self, node: ReportNode) -> List[str]:
+        """Render one observation as an H3 card + body."""
+        d = node.data if isinstance(node.data, dict) else {}
+        obs_id = d.get("id") or "?"
+        label  = d.get("label") or obs_id
+        kind, schema = self._CARD_CHIPS.get(node.type, (node.type, None))
+        chip = kind if schema is None else f"{kind} · {schema}"
+        size = self._card_size(node)
+        if size:
+            chip = f"{chip} · {size}"
+        header = f"### `{obs_id}` &nbsp; <sub>{chip}</sub>"
+        if label and label != obs_id:
+            header += f"  \n_{label}_"
+        body = self._render(node)
+        out = [header, ""]
+        out.extend(body)
+        if node.required:
+            out.append("")
+            out.append("> **required**")
+        return out
+
+    def _card_size(self, node: ReportNode) -> Optional[str]:
+        d = node.data if isinstance(node.data, dict) else {}
+        t = node.type
+        if t == "dom_tree":
+            n = d.get("kept_count") or d.get("node_count") or 0
+            return f"{n:,} node{'s' if n != 1 else ''}"
+        if t == "screen_map":
+            n = d.get("element_count") or 0
+            return f"{n:,} element{'s' if n != 1 else ''}"
+        if t == "set_summary":
+            n = len(d.get("items") or [])
+            return f"{n:,} item{'s' if n != 1 else ''}"
+        if t == "distribution_table":
+            return f"{d.get('unique', 0):,} keys · total {d.get('total', 0):,}"
+        if t == "histogram_table":
+            return f"{d.get('unique', 0):,} unique · total {d.get('total', 0):,}"
+        if t == "rule_result":
+            checked = d.get("checked_count")
+            return f"{checked:,} checked" if checked is not None else None
+        if t == "image":
+            w, h = d.get("width"), d.get("height")
+            return f"{w}×{h} px" if w and h else None
+        return None
+
+    def _iter_descendants(self, node: ReportNode):
+        yield node
+        for c in node.children:
+            yield from self._iter_descendants(c)
+
+    def _iter_attachments(self, node: ReportNode):
+        for n in self._iter_descendants(node):
+            for att in n.attachments:
+                yield att
+
+    def _md_attachment_line(self, att: Attachment, ref: Dict[str, Any]) -> str:
+        sha = ref.get("sha256") or ""
+        sha_short = sha[:12] + "…" if sha else "?"
+        size = ref.get("size_bytes")
+        size_str = f" · {size:,} B" if isinstance(size, int) else ""
+        return f"- `{sha_short}` · `{att.mime_type}` · **{att.name}**{size_str}"
+
+    def _md_provenance_line(self, prov: Dict[str, Any]) -> str:
+        plugin = prov.get("plugin", "?")
+        name   = prov.get("name", "?")
+        path   = prov.get("path")
+        link   = f"[`{plugin}/{name}`]({path})" if path else f"`{plugin}/{name}`"
+        return f"Driven by scenario → {link}"
 
     def render_comparison(self, node: ReportNode) -> List[str]:
         d = node.data
@@ -131,85 +236,113 @@ class MarkdownRenderer:
     def render_field(self, node: ReportNode) -> List[str]:
         d = node.data
         unit = f" {d['unit']}" if d.get("unit") else ""
-        return [f"- **{d['label']}** (`{d['id']}`): `{d['value']}`{unit}"]
+        return [f"`{d['value']}`{unit}"]
 
     def render_status_line(self, node: ReportNode) -> List[str]:
         d = node.data
-        marker = "✅" if d["value"] else "❌"
-        return [f"- {marker} **{d['label']}** (`{d['id']}`)"]
+        return ["✓ true" if d["value"] else "✗ false"]
 
     def render_rule_result(self, node: ReportNode) -> List[str]:
         d = node.data
-        checked = d.get("checked_count")
-        scope = f" — {checked} checked" if checked is not None else ""
         if d["passed"]:
-            return [f"- ✅ **{d['label']}** (`{d['id']}`){scope}"]
-        out = [
-            f"- ❌ **{d['label']}** (`{d['id']}`){scope} — "
-            f"{d.get('violations_count', 0)} violations"
-        ]
+            return ["✓ passed"]
+        out = [f"✗ **{d.get('violations_count', 0)} violations**", ""]
         for v in d.get("violations_sample", [])[: self.VIOLATION_SAMPLE]:
-            out.append(f"    - `{v}`")
+            out.append(f"- `{v}`")
+        more = d.get("violations_count", 0) - self.VIOLATION_SAMPLE
+        if more > 0:
+            out.append(f"- _… +{more:,} more_")
         return out
 
     def render_set_summary(self, node: ReportNode) -> List[str]:
         d = node.data
         items = d.get("items", [])
         if len(items) <= self.INLINE_SET_LIMIT:
-            return [f"- **{d['label']}** (`{d['id']}`): {len(items)} items — `{items}`"]
-        preview = items[: self.SET_PREVIEW]
-        return [
-            f"- **{d['label']}** (`{d['id']}`): {len(items)} items, "
-            f"e.g. `{preview}` _… +{len(items) - self.SET_PREVIEW} more_"
-        ]
+            return [f"- `{i}`" for i in items] or ["_(empty)_"]
+        out = [f"- `{i}`" for i in items[: self.SET_PREVIEW]]
+        out.append(f"- _… +{len(items) - self.SET_PREVIEW:,} more_")
+        return out
 
     def render_distribution_table(self, node: ReportNode) -> List[str]:
         d = node.data
         rows = d.get("rows", [])
-        out = [
-            f"- **{d['label']}** (`{d['id']}`): {d['unique']} keys, total={d['total']}",
-            "",
-            "    | Key | Count |",
-            "    |---|---|",
-        ]
+        out = ["| Key | Count |", "|---|---|"]
         for k, v in rows[: self.DISTRIB_TOP]:
-            out.append(f"    | `{k}` | {v} |")
+            out.append(f"| `{k}` | {v} |")
         if len(rows) > self.DISTRIB_TOP:
-            out.append(f"    | _… +{len(rows) - self.DISTRIB_TOP} more_ | |")
+            out.append(f"| _… +{len(rows) - self.DISTRIB_TOP} more_ | |")
         return out
 
     def render_histogram_table(self, node: ReportNode) -> List[str]:
         d = node.data
         rows = d.get("rows", [])
-        out = [
-            f"- **{d['label']}** (`{d['id']}`): {d['unique']} unique, "
-            f"total={d['total']}",
-            "",
-            "    | Item | Count |",
-            "    |---|---|",
-        ]
+        out = ["| Item | Count |", "|---|---|"]
         for k, count in rows[: self.HISTOGRAM_TOP]:
-            out.append(f"    | `{k}` | {count} |")
+            out.append(f"| `{k}` | {count} |")
         return out
 
     # ── payload node renderers ───────────────────────────────────────
 
     def render_image(self, node: ReportNode) -> List[str]:
         d = node.data
-        out = [
-            f"- **{d['label']}** (`{d['id']}`) — payload `screenshot`",
-            f"    - Format: `{d.get('format')}`",
-            f"    - Size: {d.get('width')}×{d.get('height')} px, "
-            f"{d.get('size_bytes')} bytes",
-            f"    - sha256: `{d.get('sha256') or ''}`",
-            "",
-        ]
-        # Inline as data URL when an asset_loader is available; else
-        # emit a relative `ref` link (works when MD lives next to assets).
+        meta = []
+        if d.get("format"):
+            meta.append(f"`{d['format']}`")
+        if d.get("size_bytes"):
+            meta.append(f"{d['size_bytes']:,} B")
+        if d.get("sha256"):
+            meta.append(f"sha `{d['sha256'][:12]}…`")
+        out = [" · ".join(meta)] if meta else []
+        out.append("")
         img_src = self._image_src(node)
         if img_src:
-            out.append(f"![{d['label']}]({img_src})")
+            label = d.get("label") or d.get("id") or "screenshot"
+            out.append(f"![{label}]({img_src})")
         return out
+
+    # ── screen_map ────────────────────────────────────────────────────
+
+    SCREEN_MAP_ROW_LIMIT = 200
+
+    def render_screen_map(self, node: ReportNode) -> List[str]:
+        d = node.data
+        rows = d.get("rows", [])
+        chips = []
+        if d.get("interactive_count"):
+            chips.append(f"{d['interactive_count']} interactive")
+        if d.get("heading_count"):
+            chips.append(f"{d['heading_count']} headings")
+        if d.get("form_count"):
+            chips.append(f"{d['form_count']} forms")
+        out: List[str] = []
+        if d.get("url"):
+            out.append(f"_url:_ `{d['url']}`")
+        if chips:
+            out.append(" · ".join(chips))
+        if out:
+            out.append("")
+        out += ["| UIPath | Role | Name | Tier |", "|---|---|---|---|"]
+        for r in rows[: self.SCREEN_MAP_ROW_LIMIT]:
+            tier_raw = str(r.get("stability") or "weak")
+            tier = tier_raw.upper()
+            glyph = self.TIER_GLYPHS.get(tier, "⚪")
+            name = r.get("name") or "–"
+            role = r.get("role") or "–"
+            out.append(
+                f"| `{r['uipath']}` | {role} | "
+                f"{self._escape_md(name)} | {glyph} {tier} |"
+            )
+        if len(rows) > self.SCREEN_MAP_ROW_LIMIT:
+            out.append(
+                f"| _… +{len(rows) - self.SCREEN_MAP_ROW_LIMIT:,} more_ "
+                f"| | | |"
+            )
+        return out
+
+    @staticmethod
+    def _escape_md(s: str) -> str:
+        # Conservative: escape pipes (table) and backticks. Newlines → space.
+        return s.replace("|", "\\|").replace("`", "\\`").replace("\n", " ")
 
     # ── dom_tree (leaves at top, ancestors revealed below) ───────────────
 
@@ -220,34 +353,35 @@ class MarkdownRenderer:
     def render_dom_tree(self, node: ReportNode) -> List[str]:
         d = node.data
         flt = d.get("filter")
-        flt_desc = (
-            f" — filter `{flt}`, with_hierarchy=`{d.get('with_hierarchy')}`"
-            if flt else " — no filter (full tree)"
-        )
-        leaves = _collect_leaves(d.get("root"))
-        out = [
-            f"- **{d['label']}** (`{d['id']}`) — payload `dom_tree`{flt_desc}",
-            f"    - Nodes: {d.get('node_count', 0):,}, "
-            f"kept: {d.get('kept_count', 0):,}, "
-            f"skipped: {d.get('skipped_count', 0):,}, "
-            f"leaves: {len(leaves):,}",
-            "",
+        chips = [
+            f"{d.get('kept_count', 0):,} kept",
+            f"{d.get('skipped_count', 0):,} skipped",
+            f"{d.get('node_count', 0):,} total",
         ]
-        count = [0]
-        for leaf, ancestors in leaves[: self.DOM_LEAVES_CAP]:
-            if count[0] >= self.DOM_TREE_NODE_LIMIT:
-                break
-            self._md_emit_leaf(leaf, ancestors, indent=4, out=out, count=count)
-        if len(leaves) > self.DOM_LEAVES_CAP:
-            out.append(
-                f"    _… +{len(leaves) - self.DOM_LEAVES_CAP:,} "
-                f"more leaves omitted_"
-            )
+        if flt:
+            chips.append(f"filter `{flt}`")
+        else:
+            chips.append("no filter")
+        out = [" · ".join(chips), "", "```"]
+
+        root = d.get("root")
+        emitted = [0]
+        if root:
+            self._tree_lines(root, prefix="", is_last=True, is_root=True,
+                             out=out, emitted=emitted,
+                             cap=self.DOM_TREE_NODE_LIMIT)
+            if emitted[0] >= self.DOM_TREE_NODE_LIMIT:
+                out.append(f"… (truncated at {self.DOM_TREE_NODE_LIMIT:,} nodes)")
+        else:
+            out.append("(empty)")
+        out.append("```")
 
         skipped = d.get("skipped") or []
         if skipped:
             out.append("")
-            out.append(f"    <details><summary>Skipped ({len(skipped):,})</summary>")
+            out.append(
+                f"<details><summary>Skipped ({len(skipped):,})</summary>"
+            )
             out.append("")
             for s in skipped[: self.DOM_SKIPPED_PREVIEW]:
                 tag_id = f"{s.get('tag','?')}"
@@ -256,87 +390,76 @@ class MarkdownRenderer:
                 cls = ".".join(s.get("classes") or [])
                 if cls:
                     tag_id += f".{cls}"
-                out.append(f"    - `{tag_id}` _({s.get('reason','')})_")
+                out.append(f"- `{tag_id}` _({s.get('reason','')})_")
             if len(skipped) > self.DOM_SKIPPED_PREVIEW:
                 out.append(
-                    f"    - _… +{len(skipped) - self.DOM_SKIPPED_PREVIEW:,} more_"
+                    f"- _… +{len(skipped) - self.DOM_SKIPPED_PREVIEW:,} more_"
                 )
-            out.append("    </details>")
+            out.append("")
+            out.append("</details>")
         return out
 
-    def _md_emit_leaf(
+    def _tree_lines(
         self,
-        leaf: Dict[str, Any],
-        ancestors: List[Dict[str, Any]],
+        node: Dict[str, Any],
         *,
-        indent: int,
+        prefix: str,
+        is_last: bool,
+        is_root: bool,
         out: List[str],
-        count: List[int],
+        emitted: List[int],
+        cap: int,
     ) -> None:
-        prefix = " " * indent
-        out.append(f"{prefix}- {self._md_node_summary(leaf)}")
-        count[0] += 1
-        for k, v in self._md_node_props(leaf):
-            out.append(f"{prefix}    - {k}: `{v}`")
-        if ancestors:
-            # Compact breadcrumb only — props rendered on the leaf, not on
-            # every ancestor (otherwise every shared ancestor's CSS gets
-            # duplicated across every descendant leaf).
-            out.append(f"{prefix}    - **Ancestors (innermost → root):**")
-            for anc in ancestors:
-                out.append(f"{prefix}        - {self._md_node_summary(anc)}")
+        if emitted[0] >= cap:
+            return
+        if is_root:
+            label = self._tree_node_label(node)
+            out.append(label)
+            child_prefix = ""
+        else:
+            connector = "└── " if is_last else "├── "
+            out.append(prefix + connector + self._tree_node_label(node))
+            child_prefix = prefix + ("    " if is_last else "│   ")
+        emitted[0] += 1
+        children = node.get("children") or []
+        for i, child in enumerate(children):
+            self._tree_lines(
+                child,
+                prefix=child_prefix,
+                is_last=(i == len(children) - 1),
+                is_root=False,
+                out=out,
+                emitted=emitted,
+                cap=cap,
+            )
 
-    def _md_node_summary(self, n: Dict[str, Any]) -> str:
+    def _tree_node_label(self, n: Dict[str, Any]) -> str:
         tag = n.get("tag", "?")
-        marker = "·" if n.get("connector") else "•"
         attrs: List[str] = []
         if n.get("id"):
             attrs.append(f"#{n['id']}")
         if n.get("classes"):
-            attrs.append("." + ".".join(n["classes"][:3]))
+            attrs.append("." + ".".join(n["classes"][:2]))
+        node_attrs = n.get("attributes") or {}
+        if isinstance(node_attrs, dict):
+            if node_attrs.get("testid"):
+                attrs.append(f"[testid={node_attrs['testid']}]")
+            if node_attrs.get("data-testid"):
+                attrs.append(f"[testid={node_attrs['data-testid']}]")
         if n.get("role"):
             attrs.append(f"[role={n['role']}]")
         text = (n.get("text") or "").strip()
-        text_str = f' "{text[:40]}"' if text else ""
-        bbox = ""
-        if (n.get("width") or 0) and (n.get("height") or 0):
-            bbox = f" @{n['x']},{n['y']} {n['width']}×{n['height']}"
-        return f"{marker} `{tag}{''.join(attrs)}`{bbox}{text_str}"
-
-    def _md_node_props(self, n: Dict[str, Any]) -> List[tuple]:
-        rows: List[tuple] = []
-        text = (n.get("text") or "").strip()
-        if text and len(text) > 40:
-            rows.append(("text", text[:200]))
-        if n.get("aria_label"):
-            rows.append(("aria-label", str(n["aria_label"])))
-        if n.get("position"):
-            rows.append(("position", str(n["position"])))
-        if n.get("z_index"):
-            rows.append(("z-index", str(n["z_index"])))
-        rows.append(("visible", "yes" if n.get("visible") else "no"))
-        style = n.get("computed_style") or {}
-        if isinstance(style, dict):
-            for k, v in style.items():
-                if v in (None, "", "auto", "normal"):
-                    continue
-                rows.append((f"css/{k}", str(v)))
-        attrs = n.get("attributes") or {}
-        if isinstance(attrs, dict):
-            for k, v in attrs.items():
-                rows.append((f"attr/{k}", str(v)[:200]))
-        return rows
+        text_str = f'  "{text[:40]}"' if text else ""
+        return f"{tag}{''.join(attrs)}{text_str}"
 
     def render_unknown_payload(self, node: ReportNode) -> List[str]:
         d = node.data
-        return [
-            f"- **{d['label']}** (`{d['id']}`) — payload `{d['payload_schema']}`",
-            f"    - _data type: {d.get('data_type', '?')}_",
-        ]
+        return [f"_unknown payload schema `{d['payload_schema']}` "
+                f"(data type: {d.get('data_type', '?')})_"]
 
     def render_unknown_obs(self, node: ReportNode) -> List[str]:
         d = node.data
-        return [f"- ? **{d['label']}** (`{d['id']}`): unknown kind={d['kind']}"]
+        return [f"_unknown observation kind `{d['kind']}`_"]
 
     # ── change node renderers ────────────────────────────────────────
 

@@ -62,7 +62,33 @@
               "style": "arrow"
             }
           ],
-          "children": {}
+          "children": {
+            "page_state": {
+              "type": "SmartDocument",
+              "model_version": 1,
+              "id": "page_state",
+              "label": "PageState",
+              "description": "Frozen dataclass returned by every BrowserProtocol implementation. Fields: available, loaded, status, url, title, viewport, dom_walk (flat pre-order list), screenshot, screenshot_format, error. The contract between browser and plugin \u2014 the seam where fakes / fixtures plug in.",
+              "metadata": {
+                "location": "dimensions/kinds/visual/injection.py:PageState"
+              },
+              "opts": {},
+              "shape": "rect",
+              "links": [
+                {
+                  "target": "browser_protocol",
+                  "label": "returned by",
+                  "style": "arrow"
+                },
+                {
+                  "target": "schema_dom_tree",
+                  "label": "feeds",
+                  "style": "arrow"
+                }
+              ],
+              "children": {}
+            }
+          }
         },
         "web_dimension": {
           "type": "SmartDocument",
@@ -233,7 +259,23 @@
                   "style": "arrow"
                 }
               ],
-              "children": {}
+              "children": {
+                "playwright_impl": {
+                  "type": "SmartDocument",
+                  "model_version": 1,
+                  "id": "playwright_impl",
+                  "label": "PlaywrightBrowserProtocol",
+                  "description": "Concrete BrowserProtocol implementation driving Chromium via Playwright (async API). Surfaces every failure mode (ImportError, launch failure, navigation error) as a PageState(available=False, error=...) rather than raising, so the visual plugin always produces an envelope. Configurable wait strategy, viewport, full-page screenshot toggle.",
+                  "metadata": {
+                    "status": "implemented",
+                    "location": "dimensions/kinds/visual/injection.py:PlaywrightBrowserProtocol"
+                  },
+                  "opts": {},
+                  "shape": "rect",
+                  "links": [],
+                  "children": {}
+                }
+              }
             },
             "data_protocol": {
               "type": "SmartDocument",
@@ -415,6 +457,26 @@
               "shape": "rect",
               "links": [],
               "children": {}
+            },
+            "payload": {
+              "type": "SmartDocument",
+              "model_version": 1,
+              "id": "payload",
+              "label": "Payload",
+              "description": "Free-form structured observation. The escape hatch for data the other six kinds can't express \u2014 DOM trees, screen maps, screenshots, accessibility trees. Discriminated by `payload_schema`; the diff and render layers dispatch on that discriminator. Adding a new schema is a payload-level change, not a framework-level one.",
+              "metadata": {
+                "location": "dimensions/observation.py:payload"
+              },
+              "opts": {},
+              "shape": "rect",
+              "links": [
+                {
+                  "target": "payload_schemas",
+                  "label": "schemas live in",
+                  "style": "arrow"
+                }
+              ],
+              "children": {}
             }
           }
         },
@@ -447,6 +509,102 @@
             }
           ],
           "children": {}
+        },
+        "payload_schemas": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "payload_schemas",
+          "label": "Payload Schemas",
+          "description": "The closed registry of payload shapes the framework knows how to diff and render. Each schema is a Pydantic model plus a per-kind diff in diff_render.py and a per-kind render method in render_schema.py / renderers/*.py. Plugins emit observations with payload_schema=<name>; the framework dispatches accordingly.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {
+            "schema_dom_tree": {
+              "type": "SmartDocument",
+              "model_version": 1,
+              "id": "schema_dom_tree",
+              "label": "dom_tree",
+              "description": "Hierarchical DOM with per-element attributes, computed styles, layout, role. Built from the flat PageState.dom_walk by _build_tree. The richest payload \u2014 feeds the tree diff and the HTML renderer's interactive subtree view.",
+              "metadata": {},
+              "opts": {},
+              "shape": "rect",
+              "links": [
+                {
+                  "target": "page_state",
+                  "label": "derived from",
+                  "style": "arrow"
+                },
+                {
+                  "target": "tree_diff",
+                  "label": "diffed by",
+                  "style": "arrow"
+                }
+              ],
+              "children": {}
+            },
+            "schema_screen_map": {
+              "type": "SmartDocument",
+              "model_version": 1,
+              "id": "schema_screen_map",
+              "label": "screen_map",
+              "description": "Flat UIPath-keyed element index. Each entry: tag, role, accessible_name, bbox, interactive flag, stability tier. Smaller and more semantically labeled than dom_tree; the artefact LLM discovery, scenario authors, and reviewers reference.",
+              "metadata": {},
+              "opts": {},
+              "shape": "rect",
+              "links": [
+                {
+                  "target": "ui_path",
+                  "label": "keyed by",
+                  "style": "arrow"
+                }
+              ],
+              "children": {}
+            },
+            "schema_screenshot": {
+              "type": "SmartDocument",
+              "model_version": 1,
+              "id": "schema_screenshot",
+              "label": "screenshot",
+              "description": "PNG bytes referenced by content-addressed sha. Metadata: width, height, size_bytes, mime_type, ref. The bytes live in the assets directory; the envelope carries only metadata, keeping JSON binary-free.",
+              "metadata": {},
+              "opts": {},
+              "shape": "rect",
+              "links": [
+                {
+                  "target": "screenshot_diff",
+                  "label": "diffed by",
+                  "style": "arrow"
+                }
+              ],
+              "children": {}
+            },
+            "schema_html": {
+              "type": "SmartDocument",
+              "model_version": 1,
+              "id": "schema_html",
+              "label": "html",
+              "description": "Full rendered HTML source as a string. Mostly used for inspection / diagnostics; the dom_tree payload carries the structurally analysable view.",
+              "metadata": {},
+              "opts": {},
+              "shape": "rect",
+              "links": [],
+              "children": {}
+            },
+            "schema_elements": {
+              "type": "SmartDocument",
+              "model_version": 1,
+              "id": "schema_elements",
+              "label": "elements (legacy)",
+              "description": "Flat list of element dicts produced by an earlier visual capture pipeline. Retained as a payload schema for backwards compatibility with older snapshots; new captures emit dom_tree / screen_map instead.",
+              "metadata": {},
+              "opts": {},
+              "shape": "rect",
+              "links": [],
+              "children": {}
+            }
+          }
         }
       }
     },
@@ -511,6 +669,71 @@
           "opts": {},
           "shape": "rect",
           "links": [],
+          "children": {}
+        },
+        "html_renderer": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "html_renderer",
+          "label": "HTML Renderer",
+          "description": "Self-contained HTML output. Consumes the ReportNode IR, emits a single .html per envelope or diff page with embedded CSS + JS (no external assets required). Used by render-html and render-diff. Embeds comments as a JSON island so reports work offline; switches to live mode automatically when served by the comments service.",
+          "metadata": {
+            "status": "implemented",
+            "location": "dimensions/renderers/html.py"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "render_ir",
+              "label": "consumes",
+              "style": "arrow"
+            },
+            {
+              "target": "inline_review",
+              "label": "produces",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        },
+        "render_ir": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "render_ir",
+          "label": "Render IR (ReportNode)",
+          "description": "Intermediate representation between RenderSchema and renderers. A tree of ReportNode {type, data, children, required, attachments}. Every renderer dispatches on node.type \u2014 render_envelope / render_field / render_status_line / render_screenshot_diff / etc. Plugins never touch the IR.",
+          "metadata": {
+            "location": "dimensions/render_ir.py"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "render_schema": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "render_schema",
+          "label": "RenderSchema",
+          "description": "Envelope \u2192 IR translation. BaseRenderSchema has per-kind methods (render_scalar, render_payload, render_change_*) plus per-payload-schema dispatch (render_payload_dom_tree, render_payload_screenshot). Subclasses override only the methods they need; per-dimension renderers inherit the rest.",
+          "metadata": {
+            "location": "dimensions/render_schema.py"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "envelope",
+              "label": "translates",
+              "style": "arrow"
+            },
+            {
+              "target": "render_ir",
+              "label": "produces",
+              "style": "arrow"
+            }
+          ],
           "children": {}
         }
       }
@@ -884,6 +1107,58 @@
             }
           ],
           "children": {}
+        },
+        "step_runner": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "step_runner",
+          "label": "Step Runner",
+          "description": "Executes scenario Step actions against the fixture's resolved walk. Today supports read-only assertions: expect_text (resolve target via UIPath, compare text to step.value) and expect_visible (assert node.visible). Action steps (visit/click/type/submit) are recorded but skipped \u2014 a future state-machine fixture form will let them transition fixture state between assertions.",
+          "metadata": {
+            "status": "implemented",
+            "location": "dimensions/testing/scenarios.py:_run_expect_steps"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "ui_path",
+              "label": "resolves via",
+              "style": "arrow"
+            },
+            {
+              "target": "scenarios",
+              "label": "drives",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        },
+        "capture_to_fixture": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "capture_to_fixture",
+          "label": "capture-to-fixture",
+          "description": "CLI bridge: take a real captured snapshot envelope, flatten its dom_tree, derive canonical UIPaths, trim by mode (meaningful/all/text-only), emit a compact UIPath-keyed scenario fixture. Lets authors build realistic fixtures from a running app instead of hand-writing them.",
+          "metadata": {
+            "status": "implemented",
+            "location": "dimensions/cli/main.py:cmd_capture_to_fixture"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "snapshot_envelope",
+              "label": "reads",
+              "style": "arrow"
+            },
+            {
+              "target": "scenarios",
+              "label": "produces",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
         }
       }
     },
@@ -902,10 +1177,10 @@
           "type": "SmartDocument",
           "model_version": 1,
           "id": "ui_path_adoption",
-          "label": "UIPath Adoption (PR3)",
-          "description": "Diff layer's _path_keys becomes a thin wrapper around uipath.from_node so diff and Scenario references speak the same language. Scenario.Step.target retypes from str to UIPath with full validation. Comment gains optional parent_uipath sibling to parent_entity_id for element-level anchoring. HTML renderer adds bbox-overlay JS so clicking a UIPath highlights the corresponding region on the screenshot.",
+          "label": "UIPath Adoption (PR3 \u2014 partial)",
+          "description": "Partial. Shipped: _path_keys wraps uipath.derive_all (back-compat preserved); Scenario.Step.target retyped to UIPath with snapshot-resolve validator; step runner executes expect_text / expect_visible against resolved targets; capture-to-fixture CLI emits UIPath-keyed fixtures from real captures. Pending: Comment.parent_uipath element-level anchor (alongside parent_entity_id); HTML renderer bbox-overlay JS so a UIPath text reference highlights its region on the screenshot.",
           "metadata": {
-            "status": "planned",
+            "status": "in_progress",
             "target_pr": "PR3"
           },
           "opts": {},
@@ -1028,6 +1303,430 @@
               "style": "arrow"
             }
           ],
+          "children": {}
+        }
+      }
+    },
+    "diff": {
+      "type": "SmartDocument",
+      "model_version": 1,
+      "id": "diff",
+      "label": "Diff Layer",
+      "description": "Kind-aware comparison engine. Reads two snapshot envelopes (or one of each from two labels) and emits structured per-observation deltas. Dispatches per observation kind; payload diffs further dispatch per payload_schema. The output is the IR the renderers consume to produce side-by-side reports.",
+      "metadata": {
+        "location": "dimensions/diff.py, dimensions/diff_render.py"
+      },
+      "opts": {},
+      "shape": "subroutine",
+      "links": [
+        {
+          "target": "snapshot_envelope",
+          "label": "reads two of",
+          "style": "arrow"
+        },
+        {
+          "target": "report_envelope",
+          "label": "produces",
+          "style": "arrow"
+        }
+      ],
+      "children": {
+        "envelope_diff": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "envelope_diff",
+          "label": "Envelope Diff (diff_envelopes)",
+          "description": "Top-level dispatcher: walks both envelopes by observation id, calls the per-kind diff for matched observations, and emits added/removed entries for unmatched ones. Per-kind diffs cover scalar/boolean/rule_check/set/distribution/histogram/payload.",
+          "metadata": {
+            "status": "implemented",
+            "location": "dimensions/diff.py:diff_envelopes"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "observation_kinds",
+              "label": "dispatches per",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        },
+        "tree_diff": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "tree_diff",
+          "label": "Tree Diff (compute_tree_diff)",
+          "description": "Structural diff over two dom_tree payloads. Matches nodes by UIPath (class-free, recapture-stable), produces per-node deltas across direct attributes, classes, attributes, bbox, and computed_style. Returns {stats, nodes, leaves} ready for HTML rendering with click-to-expand ancestor chains.",
+          "metadata": {
+            "status": "implemented",
+            "location": "dimensions/diff_render.py:compute_tree_diff"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "ui_path",
+              "label": "matches via",
+              "style": "arrow"
+            },
+            {
+              "target": "schema_dom_tree",
+              "label": "consumes",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        },
+        "screenshot_diff": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "screenshot_diff",
+          "label": "Screenshot Diff (compute_screenshot_diff)",
+          "description": "Pixel diff via pixelmatch (the same algorithm Playwright uses for to_have_screenshot). Pads to the union canvas when sizes differ so the diff never bails on size mismatch; emits metrics + an overlay PNG highlighting changed regions.",
+          "metadata": {
+            "status": "implemented",
+            "location": "dimensions/diff_render.py:compute_screenshot_diff"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "schema_screenshot",
+              "label": "consumes",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        },
+        "path_keys": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "path_keys",
+          "label": "Path Keys (UIPath-backed)",
+          "description": "Per-node string key for tree-diff matching. Today a thin wrapper over uipath.derive_all + format_uipath \u2014 emits byte-identical strings for legacy walks (back-compat verified via _path_keys_legacy in tests) and bracket-form selectors (testid/role/name) when richer captures supply them. The matching algorithm at the heart of the diff layer.",
+          "metadata": {
+            "status": "implemented",
+            "location": "dimensions/diff_render.py:_path_keys"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "ui_path",
+              "label": "wraps",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        }
+      }
+    },
+    "cli": {
+      "type": "SmartDocument",
+      "model_version": 1,
+      "id": "cli",
+      "label": "CLI Surface",
+      "description": "User-facing command surface. Every command takes a `<scope>` (`all` or a dimension name) and a subcommand. Implemented in dimensions/cli/main.py as one argparse parser with a dispatch table. Each command is a thin orchestration over the framework primitives \u2014 no business logic in the CLI itself.",
+      "metadata": {
+        "location": "dimensions/cli/main.py"
+      },
+      "opts": {},
+      "shape": "stadium",
+      "links": [],
+      "children": {
+        "cmd_list": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "cmd_list",
+          "label": "list / list-snapshots",
+          "description": "Enumerate registered dimensions or saved snapshots. Read-only; reads the registry and the storage backend.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "cmd_schema": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "cmd_schema",
+          "label": "schema",
+          "description": "Print the Pydantic-generated JSON Schema for envelopes. Read-only; calls the schema generator.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "schema_generation",
+              "label": "renders",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        },
+        "cmd_inspect": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "cmd_inspect",
+          "label": "inspect",
+          "description": "One-shot live capture + render to terminal without persisting. Diagnostic / dev-loop tool.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "cmd_capture": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "cmd_capture",
+          "label": "capture",
+          "description": "Run every applicable plugin, persist the resulting snapshot envelopes (and their attached assets) under the given label.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "snapshot_envelope",
+              "label": "writes",
+              "style": "arrow"
+            },
+            {
+              "target": "filesystem_backend",
+              "label": "via",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        },
+        "cmd_show": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "cmd_show",
+          "label": "show",
+          "description": "Markdown rendering of one saved snapshot. Read-only.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "markdown_renderer",
+              "label": "uses",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        },
+        "cmd_report": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "cmd_report",
+          "label": "report",
+          "description": "Full markdown report for a label across every applicable dimension.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "cmd_diff": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "cmd_diff",
+          "label": "diff",
+          "description": "Markdown comparison between two saved snapshots. Orchestrates the diff layer; emits the result via the markdown renderer.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "diff",
+              "label": "orchestrates",
+              "style": "arrow"
+            },
+            {
+              "target": "markdown_renderer",
+              "label": "renders via",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        },
+        "cmd_render_html": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "cmd_render_html",
+          "label": "render-html",
+          "description": "Emit self-contained HTML reports for every envelope in a label. Embeds comments as a JSON island, decorates observation cards with data-entity-id.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "html_renderer",
+              "label": "uses",
+              "style": "arrow"
+            },
+            {
+              "target": "inline_review",
+              "label": "embeds",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        },
+        "cmd_render_md": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "cmd_render_md",
+          "label": "render-md",
+          "description": "Emit one markdown file per envelope in a label. Assets copied alongside.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "cmd_render_diff": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "cmd_render_diff",
+          "label": "render-diff",
+          "description": "Side-by-side HTML diff between two labels, per envelope. Wraps both diff channels (tree + screenshot), embeds merged comments from both labels.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "diff",
+              "label": "orchestrates",
+              "style": "arrow"
+            },
+            {
+              "target": "html_renderer",
+              "label": "uses",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        },
+        "cmd_capture_to_fixture": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "cmd_capture_to_fixture",
+          "label": "capture-to-fixture",
+          "description": "Convert a captured snapshot envelope into a compact UIPath-keyed fixture JSON. Reads page.dom_tree, derives canonical UIPaths, filters by --trim mode (meaningful/all/text-only), writes to tests/scenarios/<dim>/<name>.json.",
+          "metadata": {
+            "status": "implemented",
+            "location": "dimensions/cli/main.py:cmd_capture_to_fixture"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "snapshot_envelope",
+              "label": "reads",
+              "style": "arrow"
+            },
+            {
+              "target": "scenarios",
+              "label": "writes",
+              "style": "arrow"
+            },
+            {
+              "target": "ui_path",
+              "label": "derives via",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        },
+        "cmd_comment": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "cmd_comment",
+          "label": "comment",
+          "description": "Add / resolve / list comments on a snapshot label. The CLI half of Phase A \u2014 writes the same comments.json sidecar the service serves in Phase B.",
+          "metadata": {},
+          "opts": {},
+          "shape": "rect",
+          "links": [
+            {
+              "target": "sidecar_storage",
+              "label": "writes",
+              "style": "arrow"
+            }
+          ],
+          "children": {}
+        }
+      }
+    },
+    "storage": {
+      "type": "SmartDocument",
+      "model_version": 1,
+      "id": "storage",
+      "label": "Storage",
+      "description": "Snapshot persistence layer. An abstract `SnapshotBackend` defines the read/write/list contract; FilesystemBackend is the default implementation that stores envelopes + assets + comments on local disk. Plugins never see the backend \u2014 the framework persists envelopes on context exit.",
+      "metadata": {
+        "location": "dimensions/store/"
+      },
+      "opts": {},
+      "shape": "rect",
+      "links": [
+        {
+          "target": "snapshot_envelope",
+          "label": "persists",
+          "style": "arrow"
+        }
+      ],
+      "children": {
+        "snapshot_backend": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "snapshot_backend",
+          "label": "SnapshotBackend (abstract)",
+          "description": "ABC defining the read/write/list contract: save(env), load(env_name), exists, list_envelopes, read_asset, write_asset. Implementations are pluggable \u2014 filesystem today; object storage / database backends fit the same interface.",
+          "metadata": {
+            "status": "implemented",
+            "location": "dimensions/store/base.py"
+          },
+          "opts": {},
+          "shape": "rect",
+          "links": [],
+          "children": {}
+        },
+        "filesystem_backend": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "filesystem_backend",
+          "label": "FilesystemBackend",
+          "description": "Default backend. Stores envelopes as `<base>/<dim>/<label>/<env>.snap.json`, assets as `<base>/<dim>/<label>/assets/<sha>.<ext>` (content-addressed, deduped), comments as `<base>/<dim>/<label>/comments.json`. Atomic writes via tmp+replace. Configured via `backend.path` in dimensions.config.yaml.",
+          "metadata": {
+            "status": "implemented",
+            "location": "dimensions/store/filesystem.py"
+          },
+          "opts": {},
+          "shape": "cylinder",
+          "links": [
+            {
+              "target": "sidecar_storage",
+              "label": "co-located with",
+              "style": "line"
+            }
+          ],
+          "children": {}
+        },
+        "snapshot_layout": {
+          "type": "SmartDocument",
+          "model_version": 1,
+          "id": "snapshot_layout",
+          "label": "Snapshot Layout Convention",
+          "description": "Logical directory shape every backend must mirror: `<base>/<dimension>/<label>/<envelope_name>.snap.json`, with sibling `assets/` for binary attachments and `comments.json` for the review sidecar. The path conventions are the framework's stable interface to its on-disk artefacts \u2014 tools (render-diff, capture-to-fixture, the comments service) all assume this shape.",
+          "metadata": {},
+          "opts": {},
+          "shape": "hexagon",
+          "links": [],
           "children": {}
         }
       }

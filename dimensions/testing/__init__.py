@@ -23,7 +23,9 @@ from dimensions.testing.protocols import (
 from dimensions.testing.scenarios import (
     Scenario,
     Step,
+    UnresolvedScenarioVar,
     discover,
+    resolve_scenario_urls,
     run_scenario,
 )
 from dimensions.testing.properties import (
@@ -35,10 +37,12 @@ __all__ = [
     "FixtureBrowserProtocol",
     "Scenario",
     "Step",
+    "UnresolvedScenarioVar",
     "assert_expectations",
     "assert_generic",
     "discover",
     "make_fixture_protocol",
     "normalize_dom_walk",
+    "resolve_scenario_urls",
     "run_scenario",
 ]

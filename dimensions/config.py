@@ -63,6 +63,9 @@ class Config:
     schemas_dir: Optional[str] = None
     schemas: Dict[str, Any] = field(default_factory=dict)
     reports_dir: str = "dimensions-reports/"
+    scenario_roots: List[str] = field(
+        default_factory=lambda: ["tests/scenarios"]
+    )
 
     @classmethod
     def from_file(cls, path: Path) -> "Config":
@@ -82,6 +85,9 @@ class Config:
             ),
             schemas_dir=data.get("schemas_dir"),
             reports_dir=data.get("reports_dir", "dimensions-reports/"),
+            scenario_roots=list(
+                data.get("scenario_roots", ["tests/scenarios"])
+            ),
         )
         # Auto-discover specs in schemas_dir.
         if cfg.schemas_dir:
@@ -101,6 +107,39 @@ class Config:
         raise ValueError(
             f"Unknown backend type: {kind}. Supported: 'filesystem'."
         )
+
+    def plugin_urls(self, plugin_name: str) -> Dict[str, str]:
+        """Return the ``urls:`` map for one plugin entry.
+
+        Used to resolve ``${name}`` placeholders in scenario fixtures so
+        a scenario JSON can reference config URL keys instead of
+        hardcoding environment-specific addresses.
+        """
+        for entry in self.plugins:
+            if entry.get("name") == plugin_name:
+                urls = (entry.get("config") or {}).get("urls") or {}
+                return dict(urls)
+        return {}
+
+    def plugin_classes(self) -> Dict[str, type]:
+        """Resolve every configured plugin entry to its class, keyed by
+        the registered plugin name. Used by the scenario replay harness
+        to look up a plugin from ``scenario.plugin`` without hardcoding.
+        """
+        out: Dict[str, type] = {}
+        for entry in self.plugins:
+            module = importlib.import_module(entry["module"])
+            cls = getattr(module, entry["class"])
+            name = entry.get("name") or getattr(cls, "name", None)
+            if not name:
+                raise ValueError(
+                    f"plugin entry {entry!r} has no name (set 'name:' in "
+                    f"config or `name` class attribute on {cls.__name__})"
+                )
+            if name in out:
+                raise ValueError(f"duplicate plugin name in config: {name!r}")
+            out[name] = cls
+        return out
 
     def load_dimensions(
         self, schemas: Optional[Dict[str, Any]] = None
