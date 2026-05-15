@@ -68,13 +68,13 @@ class EnvelopeBuilder:
     def __init__(
         self,
         dimension: str,
-        category: str,
+        protocol: str,
         subject: Dict[str, Any],
         *,
         envelope_name: str = "main",
     ):
         self.dimension = dimension
-        self.category = category
+        self.protocol = protocol
         self.subject = dict(subject)
         self.observations: List[Dict[str, Any]] = []
         self._envelope_name = envelope_name
@@ -241,7 +241,7 @@ class EnvelopeBuilder:
     def _to_envelope(self) -> Dict[str, Any]:
         return {
             "dimension": self.dimension,
-            "category": self.category,
+            "protocol":  self.protocol,
             "envelope_name": self._envelope_name,
             "captured_at": datetime.now(timezone.utc).isoformat(),
             "subject": self.subject,
@@ -291,7 +291,8 @@ class CollectionContext:
         self._open_names.add(name)
         eb = EnvelopeBuilder(
             dimension=dimension or self._plugin.name,
-            category=self._plugin.category,
+            protocol=getattr(self._plugin, "protocol", "")
+                     or getattr(self._plugin, "category", ""),
             subject=subject,
             envelope_name=name,
         )
@@ -314,13 +315,14 @@ class Plugin(ABC):
     primitives via the `CollectionContext`. They do not deal with
     persistence, diff, or rendering — those are framework concerns.
 
-    Plugins declare their dimension identity through the class attributes
-    ``name``, ``category``, and ``description``; the wrapping `Dimension`
-    reads them by default and may override them.
+    Plugins declare their identity through the class attributes
+    ``name`` (dimension label) and ``protocol`` (the InjectionProtocol
+    kind they use — "browser" / "json_file" / "subprocess" / …). The
+    wrapping `Dimension` reads them by default and may override them.
     """
 
     name: str = ""
-    category: str = ""  # one of: "data" | "visual" | "web" | "cli" | "performance"
+    protocol: str = ""        # "browser" | "json_file" | "subprocess" | …
     description: str = ""
 
     def __init__(self, **config: Any) -> None:

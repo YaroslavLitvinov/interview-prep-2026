@@ -22,13 +22,13 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
-# Importing `dimensions.kinds` triggers per-kind registration so the union
+# Importing `dimensions.protocols` triggers per-kind registration so the union
 # and per-kind models all exist before we ask Pydantic for schemas.
-import dimensions.kinds as _kinds  # noqa: F401  (side-effect import)
+import dimensions.protocols as _kinds  # noqa: F401  (side-effect import)
 
 from pydantic import TypeAdapter
 
-from dimensions.kinds import KIND_REGISTRY
+from dimensions.protocols import PROTOCOL_REGISTRY
 from dimensions.schema.envelope import EnvelopeAdapter
 from dimensions.schema.observation import ObservationAdapter
 
@@ -111,7 +111,7 @@ def _build_thin_union() -> Dict[str, Any]:
     """Hand-roll the union schema as cross-file $refs to per-dimension files."""
     mapping = {
         name: f"{name}.envelope.schema.json"
-        for name in KIND_REGISTRY
+        for name in PROTOCOL_REGISTRY
     }
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -132,7 +132,7 @@ def main() -> int:
 
     # 2. Per-dimension envelopes — strip shared defs, rewrite refs across files.
     per_dimension: Dict[str, Dict[str, Any]] = {}
-    for name, spec in KIND_REGISTRY.items():
+    for name, spec in PROTOCOL_REGISTRY.items():
         adapter = TypeAdapter(spec["envelope_cls"])
         schema = adapter.json_schema()
         _rewrite_shared_refs(schema, _OBSERVATION_FILE)

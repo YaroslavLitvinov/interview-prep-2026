@@ -38,9 +38,14 @@ def test_extra_fields_rejected():
         })
 
 
-def test_url_required():
-    with pytest.raises(ValidationError):
-        Scenario.model_validate({"name": "x", "plugin": "visual", "tests": {}})
+def test_cli_scenario_parses():
+    sc = Scenario.model_validate({
+        "name": "list_works", "plugin": "cli",
+        "run":  ["python", "-c", "print(1)"],
+        "tests": {"ok": {"exit_code": {"equals": 0}}},
+    })
+    assert sc.plugin == "cli"
+    assert sc.run == ["python", "-c", "print(1)"]
 
 
 # ── URL substitution ───────────────────────────────────────────────────────

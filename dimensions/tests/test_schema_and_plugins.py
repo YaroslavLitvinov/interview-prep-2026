@@ -20,7 +20,7 @@ import pytest
 
 from dimensions import Dimension, Dimensions
 from dimensions.config import Config
-from dimensions.kinds.visual import BrowserProtocol, PageState
+from dimensions.protocols.browser import BrowserProtocol, PageState
 from plugins.data import DataPlugin
 from plugins.visual import VisualPlugin
 

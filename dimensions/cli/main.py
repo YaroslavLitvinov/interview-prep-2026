@@ -37,7 +37,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from dimensions.config import DEFAULT_CONFIG_NAME
 from dimensions.dimensions import Dimensions
-from dimensions.kinds import KIND_REGISTRY
+from dimensions.protocols import PROTOCOL_REGISTRY
 from dimensions.render import (
     render_comparison_markdown,
     render_envelope_markdown,
@@ -87,10 +87,23 @@ def _print(s: str) -> None:
 
 
 def _targets(dims: Dimensions, scoped_dim: Optional[str]) -> List[str]:
-    """Return the list of dimensions a command should act on."""
+    """Return the list of dimensions a command should act on.
+
+    Includes both registered plugin-backed dimensions and any "virtual"
+    storage namespaces present on disk (e.g. ``flow`` — flows don't
+    register a plugin but their envelopes live under ``flow/``).
+    """
     if scoped_dim:
         return [scoped_dim]
-    return dims.list_known()
+    known = list(dims.list_known())
+    # Pick up disk-only namespaces (flow envelopes have no plugin).
+    try:
+        for d in dims.backend.list_dimensions():
+            if d not in known:
+                known.append(d)
+    except AttributeError:
+        pass
+    return known
 
 
 def _no_label_message(
@@ -144,7 +157,7 @@ def cmd_list(args: argparse.Namespace) -> int:
         return 0
     _print("# Registered dimensions\n")
     for d in applicable:
-        _print(f"## `{d.name}` (category: `{d.category}`)\n")
+        _print(f"## `{d.name}` (protocol: `{d.protocol}`)\n")
         if d.description:
             _print(d.description)
             _print("")
@@ -180,7 +193,7 @@ def cmd_schema(args: argparse.Namespace) -> int:
     if args.dim is None:
         schema = EnvelopeAdapter.json_schema()
     else:
-        spec = KIND_REGISTRY.get(args.dim)
+        spec = PROTOCOL_REGISTRY.get(args.dim)
         if spec is None:
             print(f"error: unknown dimension `{args.dim}`", file=sys.stderr)
             return 2
@@ -219,22 +232,24 @@ def cmd_capture(args: argparse.Namespace) -> int:
     """
     from dimensions.config import Config
     from dimensions.testing import (
-        UnresolvedScenarioVar, discover, resolve_scenario_urls,
+        UnresolvedScenarioVar, discover, discover_flows,
+        resolve_scenario_urls,
     )
 
     cfg = Config.from_file(Path(args.config))
     dims = _build_dims(Path(args.config))
     plugin_classes = cfg.plugin_classes()
-    plugin_cfgs = {
-        e.get("name"): dict(e.get("config") or {}) for e in cfg.plugins
-    }
+    plugin_cfgs = _build_plugin_cfgs(cfg, plugin_classes)
     paths_by_key = _scenario_paths(cfg.scenario_roots)
 
     scenarios = discover(roots=cfg.scenario_roots)
+    scenarios_by_key = {(s.plugin, s.name): s for s in scenarios}
+    flows = discover_flows(roots=cfg.scenario_roots)
     if args.dim:
         scenarios = [s for s in scenarios if s.plugin == args.dim]
+        flows = []   # flows aren't dim-scoped; suppress when a dim is set
 
-    if not scenarios:
+    if not scenarios and not flows:
         _print(
             "No scenarios discovered. Add JSON files under "
             f"{cfg.scenario_roots!r} (e.g. tests/scenarios/visual/<name>.json)."
@@ -270,6 +285,23 @@ def cmd_capture(args: argparse.Namespace) -> int:
             failures += 1
             continue
         _print(f"  ✅ {s.plugin}/{s.name}: {envs} envelope(s)")
+
+    # ── Flows ─────────────────────────────────────────────────────────────
+    if flows:
+        _print(f"Running {len(flows)} flow(s):")
+    for fl in flows:
+        try:
+            ok = _run_and_persist_flow(
+                fl, dims, args.label, scenarios_by_key,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _print(f"  ❌ flow/{fl.name}: {type(exc).__name__}: {exc}")
+            failures += 1
+            continue
+        glyph = "✅" if ok else "❌"
+        _print(f"  {glyph} flow/{fl.name}: {len(fl.steps)} step(s)")
+        if not ok:
+            failures += 1
 
     return 0 if failures == 0 else 1
 
@@ -958,15 +990,52 @@ def _run_and_persist_scenario(
     from dimensions.testing import evaluate_tests
     from dimensions.validate import validate_envelope
 
-    # Build the plugin from config, overriding `urls` so the only URL
-    # captured is the one declared in the scenario. Everything else
-    # (viewport, timeout, wait policy, …) flows through unchanged.
+    # Build the plugin from config, overriding the scenario-driven
+    # input (URL for visual, command for cli, source for data) so this
+    # invocation captures exactly one target.
     kwargs = dict(plugin_cfg)
-    kwargs["urls"] = {"main": scenario.url}
+    if scenario.plugin == "cli":
+        if not scenario.run:
+            raise ValueError(
+                f"scenario {scenario.name!r}: cli scenarios require `run`"
+            )
+        kwargs["commands"] = {
+            "main": {
+                "argv":      scenario.run,
+                "cwd":       scenario.cwd,
+                "env":       dict(scenario.env or {}),
+                "timeout_s": scenario.timeout_s,
+            }
+        }
+    else:
+        if not scenario.url:
+            raise ValueError(
+                f"scenario {scenario.name!r}: visual scenarios require `url`"
+            )
+        kwargs["urls"] = {"main": scenario.url}
+        # Effective filter: project < protocol_defaults < dim < scenario.
+        from dimensions.schema.filter import FilterSpec
+        layers = [
+            kwargs.get("_root_filter"),
+            kwargs.get("_protocol_defaults_filter"),
+            kwargs.get("_dim_filter"),
+            scenario.filter,
+        ]
+        merged = FilterSpec.merge(*[l for l in layers if l is not None])
+        if not merged.is_empty():
+            kwargs["filter_spec"] = merged
+        # Drop internal-only keys before passing to plugin __init__.
+        kwargs.pop("_root_filter", None)
+        kwargs.pop("_protocol_defaults_filter", None)
+        kwargs.pop("_dim_filter", None)
     # Wait for every test target to appear before capturing — the
     # scenario already names what must be present, so re-purposing
-    # those UIPaths as Playwright readiness signals is free.
-    scenario_waits = _wait_selectors_from_tests(scenario)
+    # those UIPaths as Playwright readiness signals is free. Only
+    # applicable to visual scenarios; cli scenarios have no targets.
+    scenario_waits = (
+        _wait_selectors_from_tests(scenario)
+        if scenario.plugin != "cli" else []
+    )
     if scenario_waits:
         existing = kwargs.get("wait_for_selector")
         if existing:
@@ -1106,6 +1175,255 @@ def _wait_selectors_from_tests(scenario) -> List[str]:
                 seen.add(sel)
                 out.append(sel)
     return out
+
+
+def _build_plugin_cfgs(
+    cfg, plugin_classes: Dict[str, type],
+) -> Dict[str, Dict[str, Any]]:
+    """Per-plugin config dict, augmented with internal `_<x>_filter`
+    keys that `_run_and_persist_scenario` consumes before instantiating
+    the plugin. Filter layers: project < protocol_defaults < dim.
+    """
+    out = {
+        e.get("name"): dict(e.get("config") or {}) for e in cfg.plugins
+    }
+    root_filter = cfg.root_filter()
+    for entry in cfg.plugins:
+        name = entry.get("name")
+        if not name:
+            continue
+        if root_filter is not None:
+            out[name]["_root_filter"] = root_filter
+        cls = plugin_classes.get(name)
+        proto_name = (
+            getattr(cls, "protocol", None) or getattr(cls, "category", None)
+        ) if cls else None
+        if proto_name:
+            pd = cfg.protocol_filter(proto_name)
+            if pd is not None:
+                out[name]["_protocol_defaults_filter"] = pd
+        df = cfg.dim_filter(name)
+        if df is not None:
+            out[name]["_dim_filter"] = df
+    return out
+
+
+def _run_and_persist_flow(
+    flow, dims: Dimensions, label: str,
+    scenarios_by_key: Dict[Tuple[str, str], Any],
+) -> bool:
+    """Run a flow's steps in order; persist a flow envelope after every
+    step transition so reports stay live during long runs.
+    """
+    from datetime import datetime, timezone
+
+    step_states: List[Dict[str, Any]] = [
+        {
+            "name":   f"{st.dim}/{st.scenario}",
+            "dim":    st.dim,
+            "scenario": st.scenario,
+            "status": "pending",     # pending | running | passed | failed | skipped
+            "detail": "",
+            "halt":   bool(st.halt_on_error if st.halt_on_error is not None
+                           else flow.halt_on_error),
+        }
+        for st in flow.steps
+    ]
+
+    def _persist() -> None:
+        envelope = _build_flow_envelope(flow, step_states)
+        dims.backend.save("flow", label, flow.name, envelope)
+
+    # Initial persist — all pending.
+    _persist()
+
+    halted = False
+    overall_ok = True
+    for idx, st in enumerate(step_states):
+        if halted:
+            st["status"] = "skipped"
+            st["detail"] = "earlier step failed with halt_on_error"
+            _persist()
+            continue
+        st["status"] = "running"
+        _persist()
+        sub = scenarios_by_key.get((st["dim"], st["scenario"]))
+        if sub is None:
+            st["status"] = "failed"
+            st["detail"] = (
+                f"unit scenario {st['dim']}/{st['scenario']} not found"
+            )
+            overall_ok = False
+            if st["halt"]:
+                halted = True
+            _persist()
+            continue
+        try:
+            # The sub-scenario captures its own envelope(s) into the
+            # same label; we just check pass/fail by reading its
+            # resulting `scenario.assertions` observation.
+            ok, detail = _run_unit_for_flow(
+                sub, dims, label, scenarios_by_key,
+            )
+        except Exception as exc:  # noqa: BLE001
+            ok, detail = False, f"{type(exc).__name__}: {exc}"
+        st["status"] = "passed" if ok else "failed"
+        st["detail"] = detail
+        if not ok:
+            overall_ok = False
+            if st["halt"]:
+                halted = True
+        _persist()
+
+    return overall_ok
+
+
+def _build_flow_envelope(flow, step_states):
+    from datetime import datetime, timezone
+    observations: List[Dict[str, Any]] = []
+
+    failed = sum(1 for s in step_states if s["status"] == "failed")
+    skipped = sum(1 for s in step_states if s["status"] == "skipped")
+    passed = sum(1 for s in step_states if s["status"] == "passed")
+    pending = sum(1 for s in step_states if s["status"] in ("pending", "running"))
+
+    # Per-step rule_check + status scalar.
+    for idx, st in enumerate(step_states):
+        is_terminal = st["status"] in ("passed", "failed", "skipped")
+        passed_bool = st["status"] == "passed"
+        violations = []
+        if st["status"] in ("failed", "skipped"):
+            violations.append(st["detail"] or st["status"])
+        observations.append({
+            "id":               f"flow.step.{idx:02d}.{st['name']}",
+            "kind":             "rule_check",
+            "label":            f"step {idx+1}: {st['dim']}/{st['scenario']}",
+            "passed":           passed_bool,
+            "checked_count":    1,
+            "violations_count": 0 if is_terminal and passed_bool else (
+                1 if violations else 0
+            ),
+            "violations_sample": violations[:1],
+        })
+        observations.append({
+            "id":    f"flow.step.{idx:02d}.{st['name']}.status",
+            "kind":  "scalar",
+            "label": "step status",
+            "value": st["status"],
+        })
+
+    # Overall rollup.
+    overall_passed = failed == 0 and skipped == 0 and pending == 0
+    rollup_violations = []
+    if failed:
+        rollup_violations.append(f"{failed} step(s) failed")
+    if skipped:
+        rollup_violations.append(f"{skipped} step(s) skipped")
+    if pending:
+        rollup_violations.append(f"{pending} step(s) not yet run")
+    observations.append({
+        "id":               "scenario.assertions",
+        "kind":             "rule_check",
+        "label":            f"All steps passed for flow `{flow.name}`",
+        "passed":           overall_passed,
+        "checked_count":    len(step_states),
+        "violations_count": len(rollup_violations),
+        "violations_sample": rollup_violations,
+    })
+    observations.append({
+        "id":     "scenario.target_stability",
+        "kind":   "distribution",
+        "label":  "Flow step statuses",
+        "buckets": {
+            k: v for k, v in {
+                "passed":  passed,
+                "failed":  failed,
+                "skipped": skipped,
+                "pending": pending,
+            }.items() if v
+        },
+    })
+
+    return {
+        "envelope_version":           2,
+        "observation_schema_version": 2,
+        "envelope_name":              flow.name,
+        "dimension":                  "flow",
+        "protocol":                   "flow",
+        "captured_at":                datetime.now(timezone.utc).isoformat(),
+        "subject": {
+            "kind":  "flow",
+            "name":  flow.name,
+            "steps": [s["name"] for s in step_states],
+        },
+        "observations":     observations,
+        "dimension_version": 1,
+        "provenance": {
+            "kind":   "scenario",
+            "name":   flow.name,
+            "plugin": "flow",
+        },
+    }
+
+
+def _run_unit_for_flow(
+    sub_scenario, dims: Dimensions, label: str,
+    scenarios_by_key: Dict[Tuple[str, str], Any],
+) -> Tuple[bool, str]:
+    """Run a unit scenario inside a flow. Returns (passed, detail).
+
+    The unit's envelopes go to the snapshot store the same way they
+    would standalone; we just inspect them after to determine pass/fail.
+    """
+    from dimensions.config import Config
+    cfg = Config.from_file(Path("dimensions.config.yaml"))
+    plugin_classes = cfg.plugin_classes()
+    plugin_cls = plugin_classes.get(sub_scenario.plugin)
+    if plugin_cls is None:
+        return False, f"plugin {sub_scenario.plugin!r} not registered"
+    plugin_cfgs = _build_plugin_cfgs(cfg, plugin_classes)
+    cfg_with_filter = plugin_cfgs.get(sub_scenario.plugin, {})
+    try:
+        from dimensions.testing import resolve_scenario_urls
+        resolved = resolve_scenario_urls(
+            sub_scenario, cfg.plugin_urls(sub_scenario.plugin),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return False, f"resolve_urls: {exc}"
+    try:
+        _run_and_persist_scenario(
+            resolved, plugin_cls, dims, cfg_with_filter,
+            label=label,
+            source_path=None,
+            namespace_envelopes=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return False, f"capture: {type(exc).__name__}: {exc}"
+    # Inspect produced envelopes: locate this sub's primary envelope
+    # and read its scenario.assertions observation.
+    label_envs = dims.list_envelopes(sub_scenario.plugin, label)
+    prefix = sub_scenario.name + "."
+    primary = next(
+        (n for n in label_envs if n.startswith(prefix) and n.endswith(".tree")),
+        None,
+    ) or next(
+        (n for n in label_envs if n.startswith(prefix)),
+        None,
+    )
+    if primary is None:
+        return False, "no envelope produced"
+    env = dims.load(sub_scenario.plugin, label, primary)
+    rollup = next(
+        (o for o in env.get("observations", [])
+         if o.get("id") == "scenario.assertions"),
+        None,
+    )
+    if rollup is None:
+        return True, ""    # no test assertions = vacuous pass
+    if rollup.get("passed"):
+        return True, ""
+    sample = (rollup.get("violations_sample") or [])[:1]
+    return False, sample[0] if sample else "scenario.assertions failed"
 
 
 def _envelope_group_key(envelope: Dict[str, Any], fallback_name: str) -> str:

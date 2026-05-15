@@ -36,7 +36,7 @@ class Dimension:
         plugin: Plugin,
         *,
         name: Optional[str] = None,
-        category: Optional[str] = None,
+        protocol: Optional[str] = None,
         description: Optional[str] = None,
     ) -> None:
         if not isinstance(plugin, Plugin):
@@ -45,17 +45,24 @@ class Dimension:
             )
         self.plugin = plugin
         self.name = name or plugin.name
-        self.category = category or plugin.category
+        # ``plugin.protocol`` is the canonical attribute; ``plugin.category``
+        # is kept for back-compat with older plugin classes that haven't
+        # been migrated yet.
+        self.protocol = (
+            protocol
+            or getattr(plugin, "protocol", "")
+            or getattr(plugin, "category", "")
+        )
         self.description = description or plugin.description
         if not self.name:
             raise ValueError(
                 f"Dimension wrapping {type(plugin).__name__} has no name "
                 "(set on plugin class or pass name=...)"
             )
-        if not self.category:
+        if not self.protocol:
             raise ValueError(
-                f"Dimension {self.name} has no category "
-                "(set on plugin class or pass category=...)"
+                f"Dimension {self.name} has no protocol "
+                "(set `protocol` on plugin class or pass protocol=...)"
             )
 
     def is_applicable(self) -> bool:
@@ -74,6 +81,6 @@ class Dimension:
         envelopes: List[Dict[str, Any]] = []
         for env in ctx.finalized_envelopes:
             env["dimension"] = self.name
-            env["category"] = self.category
+            env["protocol"]  = self.protocol
             envelopes.append(validate_envelope(env))
         return CollectionResult(envelopes=envelopes, pending_assets=dict(ctx.pending_assets))

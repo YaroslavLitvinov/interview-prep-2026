@@ -1,15 +1,15 @@
 """Base envelope shape and the discriminated union over all dimension kinds.
 
 The per-dimension envelope variants (DataEnvelope, VisualEnvelope, ...) live
-in `dimensions.kinds.<name>.schema`. This module defines only the shared base
+in `dimensions.protocols.<name>.schema`. This module defines only the shared base
 fields and assembles the union after the kind packages have been imported.
 
 Import order matters: every per-kind Pydantic class must exist BEFORE the
 discriminated union is built. `dimensions/__init__.py` imports
-`dimensions.kinds` first, which in turn imports each kind's schema module.
+`dimensions.protocols` first, which in turn imports each kind's schema module.
 """
 
-from typing import Annotated, List, Literal, Optional, Union
+from typing import Annotated, List, Literal, Optional, Type, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -103,29 +103,45 @@ class _EnvelopeBase(BaseModel):
     )
 
 
-# ── Discriminated union — assembled lazily after kinds register ─────────────
+# ── Discriminated union — built dynamically from registered envelopes ──────
 
-# Sentinels populated by `_build_adapter()` below. They start as None so
-# importing this module does not eagerly drag in every kind.
+
+_REGISTERED: List[Type[_EnvelopeBase]] = []
 Envelope = None  # type: ignore[assignment]
 EnvelopeAdapter: TypeAdapter = None  # type: ignore[assignment]
 
 
-def _build_adapter() -> None:
-    """Construct the discriminated union over registered kinds.
+def register_envelope(cls: Type[_EnvelopeBase]) -> Type[_EnvelopeBase]:
+    """Register an envelope subclass; rebuilds the discriminated union.
 
-    Called once, after all `dimensions.kinds.*.schema` modules have been
-    imported (via `dimensions.kinds.__init__`). Idempotent.
+    Each per-protocol module decorates its envelope class with this at
+    import time. New protocols (built-in or user extension) just import
+    and the union extends — no hardcoded list to maintain.
     """
+    if cls not in _REGISTERED:
+        _REGISTERED.append(cls)
+        _rebuild_adapter()
+    return cls
+
+
+def _rebuild_adapter() -> None:
     global Envelope, EnvelopeAdapter
-    if EnvelopeAdapter is not None:
+    if not _REGISTERED:
         return
-
-    from dimensions.kinds.data.schema import DataEnvelope
-    from dimensions.kinds.visual.schema import VisualEnvelope
-
-    Envelope = Annotated[
-        Union[DataEnvelope, VisualEnvelope],
-        Field(discriminator="category"),
-    ]
+    if len(_REGISTERED) == 1:
+        Envelope = _REGISTERED[0]
+    else:
+        Envelope = Annotated[
+            Union[tuple(_REGISTERED)],            # type: ignore[arg-type]
+            Field(discriminator="protocol"),
+        ]
     EnvelopeAdapter = TypeAdapter(Envelope)
+
+
+def _build_adapter() -> None:
+    """Back-compat hook for the old kinds package. Imports each
+    protocol module so its envelope class registers via the decorator,
+    then ensures the adapter is built.
+    """
+    import dimensions.protocols  # noqa: F401
+    _rebuild_adapter()

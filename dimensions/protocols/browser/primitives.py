@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from dimensions.kinds.visual.injection import PageState
+from dimensions.protocols.browser.injection import PageState
 
 if TYPE_CHECKING:
     from dimensions.api import EnvelopeBuilder

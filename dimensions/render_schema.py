@@ -40,21 +40,72 @@ class BaseRenderSchema:
     # ── top-level entry points ─────────────────────────────────────────
 
     def render_envelope(self, envelope: Dict[str, Any]) -> ReportNode:
+        # Flow envelopes get a dedicated timeline view in addition to
+        # the normal per-observation cards.
+        is_flow = envelope.get("protocol") == "flow"
+        flow_timeline = None
+        if is_flow:
+            flow_timeline = self._build_flow_timeline(envelope)
         return ReportNode(
             type="envelope",
             data={
                 "dimension":     envelope.get("dimension", "?"),
                 "envelope_name": envelope.get("envelope_name", "main"),
-                "category":      envelope.get("category", "?"),
+                "protocol":      envelope.get("protocol", "?"),
                 "captured_at":   envelope.get("captured_at", "?"),
                 "subject":       envelope.get("subject") or {},
                 "provenance":    envelope.get("provenance"),
+                "flow_timeline": flow_timeline,
             },
             children=[
                 self.render_observation(o)
                 for o in envelope.get("observations", [])
             ],
         )
+
+    def _build_flow_timeline(self, envelope):
+        """Pair each `flow.step.NN.<name>` rule_check with its `.status`
+        scalar, in order. Returns a list of ``{name, dim, scenario,
+        status, detail}`` dicts the renderer can splat into a vertical
+        timeline."""
+        obs = envelope.get("observations", []) or []
+        by_id = {o.get("id"): o for o in obs}
+        steps = []
+        seen = set()
+        for o in obs:
+            oid = o.get("id", "")
+            if not oid.startswith("flow.step."):
+                continue
+            if oid in seen:
+                continue
+            # Match the rule_check (no trailing .status).
+            if oid.endswith(".status"):
+                continue
+            status_obs = by_id.get(oid + ".status")
+            status = (
+                status_obs.get("value") if status_obs else
+                ("passed" if o.get("passed") else "failed")
+            )
+            label = o.get("label", oid)
+            # extract dim/scenario from label like
+            # "step 1: cli/list_dimensions"
+            dim = scenario = ""
+            if ":" in label and "/" in label:
+                tail = label.split(":", 1)[1].strip()
+                if "/" in tail:
+                    dim, scenario = tail.split("/", 1)
+            violations = o.get("violations_sample") or []
+            steps.append({
+                "name":     label,
+                "dim":      dim,
+                "scenario": scenario,
+                "status":   str(status or "?"),
+                "detail":   violations[0] if violations else "",
+            })
+            seen.add(oid)
+            if status_obs:
+                seen.add(status_obs.get("id"))
+        return steps
 
     def render_comparison(
         self,

@@ -14,19 +14,25 @@ Public surface:
 """
 
 from dimensions.testing.scenarios import (
+    Flow,
+    FlowStep,
     Scenario,
     ScenarioCollision,
     UnresolvedScenarioVar,
     discover,
+    discover_flows,
     evaluate_tests,
     resolve_scenario_urls,
 )
 
 __all__ = [
+    "Flow",
+    "FlowStep",
     "Scenario",
     "ScenarioCollision",
     "UnresolvedScenarioVar",
     "discover",
+    "discover_flows",
     "evaluate_tests",
     "resolve_scenario_urls",
 ]

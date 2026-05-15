@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional
 import jsonschema
 
 from dimensions.api import CollectionContext, Plugin
-from dimensions.kinds.data import (
+from dimensions.protocols.json_file import (
     JsonFileProtocol,
     SpecError,
     compile_spec,
@@ -64,7 +64,7 @@ def _normalize_sources(sources) -> List[Dict[str, Any]]:
 
 class DataPlugin(Plugin):
     name = "data"
-    category = "data"
+    protocol = "json_file"
     description = (
         "Walks one or more JSON data files and reports their structural "
         "properties — size, hierarchy depth, key inventory, value-type "

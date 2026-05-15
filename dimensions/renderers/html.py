@@ -118,6 +118,27 @@ a:hover{ text-decoration:underline; }
 .test-banner ul li{
   font-family:ui-monospace,monospace; font-size:.85rem; color:#7f1d1d;
 }
+.flow-timeline{ margin:1rem 0; }
+.flow-timeline > h2{ font-size:1.05rem; margin:0 0 .5rem; }
+.flow-steps{ list-style:none; padding:0; margin:0; }
+.flow-step{
+  display:flex; gap:.6em; align-items:center; flex-wrap:wrap;
+  padding:.5rem .8rem; margin:.4rem 0;
+  border:1px solid var(--line); border-radius:.5rem;
+  background:var(--card-bg);
+}
+.flow-step-num{
+  display:inline-block; min-width:1.4em; padding:.05em .4em;
+  text-align:center; font-weight:600;
+  background:var(--code-bg); border-radius:.3em;
+}
+.flow-step-ref{ color:var(--fg); }
+.flow-detail{
+  flex-basis:100%; font-family:ui-monospace,monospace;
+  font-size:.85rem; color:var(--muted); margin-top:.2rem;
+}
+.flow-step.flow-pass{ border-color:var(--pass); }
+.flow-step.flow-fail{ border-color:var(--fail); }
 .table-wrap{ overflow-x:auto; margin-top:.5rem; }
 table{ border-collapse:collapse; width:100%; font-size:.85rem; }
 th,td{ border:1px solid var(--line); padding:.3rem .5rem; text-align:left; vertical-align:top; }
@@ -1266,22 +1287,67 @@ class HtmlRenderer:
         # thing a reviewer sees. Step list also pulled up if present.
         banner_html, children = self._extract_test_banner(node)
 
+        # Flow envelopes render a step-timeline strip below the banner.
+        timeline_html = self._render_flow_timeline(d.get("flow_timeline"))
+
         return [
             '<article class="envelope">',
             "<header>",
             f"<h1>Dimension <code>{esc(d['dimension'])}</code> · "
             f"envelope <code>{esc(d['envelope_name'])}</code>{required_marker}</h1>",
-            f'<div class="meta">category <code>{esc(d["category"])}</code> · '
+            f'<div class="meta">protocol <code>{esc(d["protocol"])}</code> · '
             f'captured <time>{esc(d["captured_at"])}</time></div>',
             prov_html,
             f'<div class="subject">{self._html_subject(d["subject"])}</div>',
             "</header>",
             banner_html,
+            timeline_html,
             '<section class="observations">',
             *children,
             "</section>",
             "</article>",
         ]
+
+    _FLOW_STATUS_GLYPH = {
+        "passed":  ("✓", "pass"),
+        "failed":  ("✗", "fail"),
+        "skipped": ("⤼", "info"),
+        "running": ("⋯", "info"),
+        "pending": ("·", "info"),
+    }
+
+    def _render_flow_timeline(self, steps) -> str:
+        if not steps:
+            return ""
+        rows = []
+        for i, st in enumerate(steps):
+            glyph, css = self._FLOW_STATUS_GLYPH.get(
+                st.get("status", "pending"), ("?", "info")
+            )
+            detail = st.get("detail") or ""
+            scenario_ref = (
+                f"<code>{esc(st['dim'])}/{esc(st['scenario'])}</code>"
+                if st.get("dim") and st.get("scenario")
+                else esc(st.get("name", "?"))
+            )
+            detail_html = (
+                f'<div class="flow-detail">{esc(detail)}</div>'
+                if detail else ""
+            )
+            rows.append(
+                f'<li class="flow-step flow-{css}">'
+                f'<span class="flow-step-num">{i+1}</span>'
+                f'<span class="chip {css}">{glyph} {esc(st["status"])}</span>'
+                f'<span class="flow-step-ref">{scenario_ref}</span>'
+                f'{detail_html}'
+                f'</li>'
+            )
+        return (
+            '<section class="flow-timeline">'
+            '<h2>Step timeline</h2>'
+            f'<ol class="flow-steps">{"".join(rows)}</ol>'
+            '</section>'
+        )
 
     # Lower → earlier in the rendered observations section.
     _OBS_RENDER_PRIORITY = {

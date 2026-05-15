@@ -4,10 +4,10 @@ Public surface: `Dimensions` is the single entry point. `Dimension` wraps a
 `Plugin`. Backends are an internal detail; users never instantiate one.
 """
 
-# Importing `dimensions.kinds` registers each per-dimension Pydantic schema
-# with the discriminated envelope union. Must happen before any code path
-# touches `EnvelopeAdapter`.
-from dimensions import kinds  # noqa: F401
+# Importing `dimensions.protocols` triggers each per-protocol schema
+# module to register its envelope class with the discriminated union.
+# Must happen before any code path touches `EnvelopeAdapter`.
+from dimensions import protocols  # noqa: F401
 
 from dimensions.api import (
     CollectionContext,

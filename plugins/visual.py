@@ -28,14 +28,16 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from dimensions.api import CollectionContext, Plugin
-from dimensions.kinds.visual import (
+from dimensions.protocols.browser import (
     BrowserProtocol,
     DEFAULT_VIEWPORT,
     PlaywrightBrowserProtocol,
+    apply_filter,
     emit_screenshot,
     emit_tree,
     url_subject_dict,
 )
+from dimensions.schema.filter import FilterSpec
 
 
 @dataclass
@@ -66,7 +68,7 @@ def _normalize(items, *, value_key: str) -> List[Dict[str, Any]]:
 
 class VisualPlugin(Plugin):
     name = "visual"
-    category = "visual"
+    protocol = "browser"
     description = (
         "Loads one or more URLs via an injectable BrowserProtocol "
         "(Playwright by default) and emits two envelopes per URL — "
@@ -76,7 +78,7 @@ class VisualPlugin(Plugin):
 
     def __init__(
         self,
-        urls,
+        urls=None,
         *,
         browser: Optional[BrowserProtocol] = None,
         viewport: Optional[Dict[str, int]] = None,
@@ -86,15 +88,21 @@ class VisualPlugin(Plugin):
         wait_after_load_ms: int = 0,
         filter: Optional[List[str]] = None,
         with_hierarchy: bool = False,
+        filter_spec: Optional[FilterSpec] = None,
         **extra: Any,
     ) -> None:
         super().__init__(
             urls=urls, viewport=viewport, timeout_ms=timeout_ms,
             wait_until=wait_until, wait_for_selector=wait_for_selector,
             wait_after_load_ms=wait_after_load_ms,
-            filter=filter, with_hierarchy=with_hierarchy, **extra,
+            filter=filter, with_hierarchy=with_hierarchy,
+            filter_spec=filter_spec, **extra,
         )
-        targets_raw = _normalize(urls, value_key="url")
+        self.filter_spec = filter_spec
+        # Scenarios drive URLs now; config-level `urls:` is optional.
+        # If absent, `is_applicable` returns False so the plugin is a
+        # no-op for non-scenario callers like `inspect`.
+        targets_raw = _normalize(urls or {}, value_key="url")
         self.targets = [VisualTarget(name=u["name"], url=u["url"]) for u in targets_raw]
         self.viewport = viewport or dict(DEFAULT_VIEWPORT)
         self.timeout_ms = int(timeout_ms)
@@ -122,6 +130,13 @@ class VisualPlugin(Plugin):
                     timeout_ms=self.timeout_ms,
                     tree_filter=self.tree_filter,
                 )
+                # Apply generic FilterSpec (scenario / config merged).
+                # `tree_filter` is the older CSS-list shortcut; the
+                # generic spec runs after and can further prune fields
+                # / values. Screenshot bytes are pixels, untouched.
+                if self.filter_spec is not None:
+                    state = apply_filter(state, self.filter_spec)
+
                 subject = url_subject_dict(t.url, self.viewport, self.browser.engine)
 
                 with ctx.envelope(name=f"{t.name}.tree", subject=subject) as env:

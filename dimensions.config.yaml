@@ -4,7 +4,53 @@
 
 schemas_dir: schemas/                      # auto-discover <name>.spec.json → registered as <name>
 
+# Scenario substitution namespace. Any scenario in any dimension can
+# reference `${name}` against these. Flat — no per-dim scoping.
+vars:
+  home:             http://172.17.0.1:8501
+  empty-search:     "http://172.17.0.2:8501/?s=non+existing"
+  non-empty-search: "http://172.17.0.2:8501/?s=LLM"
+  superset_path:    prep/superset.k.json
+
+# Project-wide filter — applies to every dimension unless overridden.
+filter:
+  drop: ["script", "style", "meta", "link", "noscript"]
+
+# Per-protocol defaults — applied on top of the project filter.
+protocol_defaults:
+  browser:
+    filter:
+      keep:   ["[testid]", "h1,h2,h3,h4", "button", "a[href]", "title"]
+      # Keep enough for UIPath derivation (id/classes/role/aria_label),
+      # the assertions (visible/text), plus minimal styling/layout.
+      fields:
+        - tag
+        - id
+        - classes
+        - role
+        - aria_label
+        - attributes.data-testid
+        - attributes.id
+        - attributes.href
+        - text
+        - visible
+        - x
+        - y
+        - width
+        - height
+        - computed_style
+      values:
+        computed_style: ["color", "background-color", "font-size", "font-weight"]
+
 plugins:
+  # ── CLI dimension ──────────────────────────────────────────────────────
+  - name: cli
+    module: plugins.cli
+    class: CliPlugin
+    config:
+      default_timeout_s: 30
+      max_output_bytes: 65536
+
   # ── Data dimension ─────────────────────────────────────────────────────
   - name: data
     module: plugins.data
@@ -18,10 +64,6 @@ plugins:
     module: plugins.visual
     class: VisualPlugin
     config:
-      urls:
-        home:             http://172.17.0.1:8501
-        empty-search:     "http://172.17.0.2:8501/?s=non+existing"
-        non-empty-search: "http://172.17.0.2:8501/?s=LLM"
       viewport:
         width: 1280
         height: 720

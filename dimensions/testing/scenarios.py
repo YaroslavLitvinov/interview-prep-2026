@@ -41,7 +41,9 @@ from pydantic import (
     Field,
     ValidationError,
 )
+from typing import Literal
 
+from dimensions.schema.filter import FilterSpec
 from dimensions.uipath import format_uipath, parse, resolve, stability
 from dimensions.uipath.derive import derive_all
 
@@ -49,25 +51,78 @@ from dimensions.uipath.derive import derive_all
 # ── models ────────────────────────────────────────────────────────────────
 
 
+class FlowStep(BaseModel):
+    """One step inside a flow scenario.
+
+    Long form: ``{"dim": "cli", "scenario": "list_works",
+                  "halt_on_error": false}``.
+    Always-required: ``dim`` + ``scenario``. ``halt_on_error: None``
+    means inherit the flow's default.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    dim:           str
+    scenario:      str
+    halt_on_error: Optional[bool] = None
+
+
+class Flow(BaseModel):
+    """A composite scenario — runs other (unit) scenarios in order.
+
+    ``kind: "flow"`` distinguishes it from a unit Scenario at parse time.
+    Each step references a unit by ``(dim, scenario)``. Step results
+    accumulate into a single flow envelope persisted progressively
+    (one write per step transition).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name:          str
+    kind:          Literal["flow"]
+    steps:         List[FlowStep] = Field(default_factory=list)
+    halt_on_error: bool = True
+
+
 class Scenario(BaseModel):
     """One test case for one plugin.
 
-    Live-capture driven: ``url`` is loaded through the plugin's real
-    protocol; ``tests`` declares assertions against the resulting walk.
+    Per-plugin payload fields:
+
+    * visual — ``url`` (required), tests target UIPaths
+    * cli    — ``run`` (required, string or argv list), ``cwd``, ``env``,
+               ``timeout_s``; tests target output fields (``exit_code``,
+               ``stdout``, ``stderr``, ``duration_ms``)
+
+    The framework dispatches by ``plugin`` at capture / evaluation time.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     name: str
     plugin: str
-    url: str
+
+    # visual dim
+    url: Optional[str] = None
+
+    # cli dim
+    run: Optional[Any] = None   # str | List[str]
+    cwd: Optional[str] = None
+    env: Dict[str, str] = Field(default_factory=dict)
+    timeout_s: Optional[float] = None
+
     tests: Dict[str, Dict[str, Dict[str, Any]]] = Field(default_factory=dict)
+
+    # Optional scenario-level filter — applied to the captured State
+    # before observations are emitted. Merged with any config-level
+    # protocol_defaults / dimension filter.
+    filter: Optional[FilterSpec] = None
 
 
 # ── discovery ─────────────────────────────────────────────────────────────
 
 
-DEFAULT_SCENARIO_ROOT = Path("tests/scenarios")
+DEFAULT_SCENARIO_ROOT = Path("tests/dimensions/scenarios")
 
 
 def discover(
@@ -75,11 +130,10 @@ def discover(
     *,
     roots: Optional[Iterable[Path]] = None,
 ) -> List[Scenario]:
-    """Find every Scenario JSON below the given root(s).
+    """Find every unit Scenario JSON below the given root(s).
 
-    Recursive glob; files that don't parse as a Scenario are silently
-    skipped. Identity is ``(plugin, name)`` — duplicate pairs raise
-    ``ScenarioCollision``.
+    Flow scenarios (``kind: "flow"``) are skipped here; use
+    ``discover_flows`` for those.
     """
     if root is not None and roots is not None:
         raise TypeError("pass either `root` or `roots`, not both")
@@ -107,17 +161,64 @@ def discover(
     return out
 
 
+def discover_flows(
+    roots: Optional[Iterable[Path]] = None,
+) -> List[Flow]:
+    """Find every Flow JSON below the given root(s).
+
+    A flow JSON file is recognized by ``"kind": "flow"`` at the top
+    level. Flows can live anywhere under the scenario_roots tree —
+    convention is ``tests/dimensions/flows/`` but discovery is by
+    content, not by directory.
+    """
+    if roots is None:
+        roots = [DEFAULT_SCENARIO_ROOT, Path("tests/dimensions/flows")]
+    out: List[Flow] = []
+    seen: Dict[str, Path] = {}
+    for r in roots:
+        r = Path(r)
+        if not r.is_dir():
+            continue
+        for path in sorted(r.rglob("*.json")):
+            flow = _try_load_flow(path)
+            if flow is None:
+                continue
+            if flow.name in seen:
+                raise ScenarioCollision(
+                    f"duplicate flow name={flow.name!r}: "
+                    f"{path} collides with {seen[flow.name]}"
+                )
+            seen[flow.name] = path
+            out.append(flow)
+    return out
+
+
 def _try_load_scenario(path: Path) -> Optional[Scenario]:
     """Return the parsed Scenario at ``path`` or ``None`` if the file
-    isn't a Scenario."""
+    isn't a unit Scenario (or it's a flow)."""
     try:
         raw = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(raw, dict) or "plugin" not in raw or "name" not in raw:
         return None
+    if raw.get("kind") == "flow":
+        return None
     try:
         return Scenario.model_validate(raw)
+    except ValidationError:
+        return None
+
+
+def _try_load_flow(path: Path) -> Optional[Flow]:
+    try:
+        raw = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict) or raw.get("kind") != "flow":
+        return None
+    try:
+        return Flow.model_validate(raw)
     except ValidationError:
         return None
 
@@ -153,8 +254,24 @@ def resolve_scenario_urls(
             )
         return url_map[key]
 
+    url = scenario.url
+    if url is not None:
+        url = _URL_VAR_RE.sub(_replace, url)
+    # Substitute in cli command components too (str run, env values).
+    run = scenario.run
+    if isinstance(run, str):
+        run = _URL_VAR_RE.sub(_replace, run)
+    elif isinstance(run, list):
+        run = [
+            _URL_VAR_RE.sub(_replace, x) if isinstance(x, str) else x
+            for x in run
+        ]
+    env_vars = {
+        k: (_URL_VAR_RE.sub(_replace, v) if isinstance(v, str) else v)
+        for k, v in (scenario.env or {}).items()
+    }
     return scenario.model_copy(update={
-        "url": _URL_VAR_RE.sub(_replace, scenario.url),
+        "url": url, "run": run, "env": env_vars,
     })
 
 
@@ -162,6 +279,16 @@ def resolve_scenario_urls(
 
 
 def evaluate_tests(
+    scenario: Scenario,
+    envelopes: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Dispatch by ``scenario.plugin`` to the right per-dim evaluator."""
+    if scenario.plugin == "cli":
+        return _evaluate_cli_tests(scenario, envelopes)
+    return _evaluate_visual_tests(scenario, envelopes)
+
+
+def _evaluate_visual_tests(
     scenario: Scenario,
     envelopes: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
@@ -273,13 +400,18 @@ def evaluate_tests(
 def _resolve_with_suffix_fallback(
     query, walk: List[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
-    """Strict `resolve` first; if no match, try suffix-match.
+    """Three-tier resolver for filtered/aggressive captures.
 
-    Suffix match: the query is a tail of exactly one node's canonical
-    UIPath. Lets authors write short, leaf-anchored paths (e.g.
-    `h1#interview-prep-2026`) instead of the full canonical chain
-    through every testid'd Streamlit ancestor. Ambiguous suffix
-    matches (≥2 hits) return None — same rule as strict resolve.
+    1. **Strict** — exact canonical path equality.
+    2. **Suffix** — query is a trailing segment of some derived path
+       (lets authors write leaf-anchored paths like
+       ``h1#interview-prep-2026`` instead of the full chain).
+    3. **Leaf-only** — query's last segment equals derived's last
+       segment. Survives aggressive filtering that drops ancestors,
+       making the canonical path shorter than what the scenario wrote.
+
+    Each tier requires *exactly one* match; ambiguous results escalate
+    to the next tier (and ultimately return None if no tier is unique).
     """
     node = resolve(query, walk)
     if node is not None:
@@ -287,17 +419,129 @@ def _resolve_with_suffix_fallback(
     if not walk:
         return None
     target = format_uipath(query)
-    needle = "><" + target + "<"  # bracketed to force segment-boundary
+    target_leaf = target.rsplit(">", 1)[-1] if ">" in target else target
     paths = derive_all(walk)
-    matches = []
-    for idx, p in paths.items():
-        s = format_uipath(p)
-        if s == target or s.endswith(">" + target):
-            matches.append(idx)
-    if len(matches) != 1:
-        return None
     by_idx = {n["idx"]: n for n in walk}
-    return by_idx[matches[0]]
+
+    # Tier 2: suffix match.
+    suffix_matches = [
+        idx for idx, p in paths.items()
+        if format_uipath(p).endswith(">" + target)
+    ]
+    if len(suffix_matches) == 1:
+        return by_idx[suffix_matches[0]]
+
+    # Tier 3: leaf-only match.
+    leaf_matches = [
+        idx for idx, p in paths.items()
+        if format_uipath(p).rsplit(">", 1)[-1] == target_leaf
+    ]
+    if len(leaf_matches) == 1:
+        return by_idx[leaf_matches[0]]
+    return None
+
+
+def _evaluate_cli_tests(
+    scenario: Scenario,
+    envelopes: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Evaluate CLI assertions against the captured command envelope.
+
+    Field selectors: ``exit_code``, ``stdout``, ``stderr``, ``duration_ms``.
+    Predicates: ``equals``, ``contains``, ``empty`` (bool), ``matches``
+    (regex), ``min``, ``max``.
+    """
+    import re as _re
+
+    # Locate the cli envelope (capture under namespaced envelope name).
+    env = next(
+        (e for e in envelopes if e.get("protocol") == "subprocess"),
+        envelopes[0] if envelopes else None,
+    )
+    obs_by_id: Dict[str, Dict[str, Any]] = {}
+    if env is not None:
+        for o in env.get("observations", []):
+            obs_by_id[o.get("id", "")] = o
+
+    def _field(name: str):
+        if name == "exit_code":
+            o = obs_by_id.get("cli.exit_code") or {}
+            return o.get("value")
+        if name == "stdout":
+            o = obs_by_id.get("cli.stdout") or {}
+            return (o.get("data") or {}).get("text", "")
+        if name == "stderr":
+            o = obs_by_id.get("cli.stderr") or {}
+            return (o.get("data") or {}).get("text", "")
+        if name == "duration_ms":
+            o = obs_by_id.get("cli.duration_ms") or {}
+            return o.get("value")
+        return None
+
+    def _check(actual, predicate: str, expected) -> Tuple[bool, str]:
+        if predicate == "equals":
+            ok = actual == expected
+            return ok, "" if ok else f"got {actual!r}, expected {expected!r}"
+        if predicate == "contains":
+            ok = str(expected) in str(actual or "")
+            return ok, "" if ok else f"{expected!r} not found in output"
+        if predicate == "matches":
+            ok = bool(_re.search(str(expected), str(actual or "")))
+            return ok, "" if ok else f"no match for /{expected}/"
+        if predicate == "empty":
+            is_empty = not bool(str(actual or "").strip())
+            ok = is_empty == bool(expected)
+            return ok, "" if ok else (
+                "expected empty, got content" if expected
+                else "expected non-empty, got empty"
+            )
+        if predicate == "min":
+            ok = actual is not None and actual >= expected
+            return ok, "" if ok else f"{actual} < {expected}"
+        if predicate == "max":
+            ok = actual is not None and actual <= expected
+            return ok, "" if ok else f"{actual} > {expected}"
+        return False, f"unknown predicate {predicate!r}"
+
+    tests_out: List[Dict[str, Any]] = []
+    all_violations: List[str] = []
+    total_checked = 0
+
+    for test_name, assertions in (scenario.tests or {}).items():
+        test_checks: List[Dict[str, Any]] = []
+        test_violations: List[str] = []
+        for field_name, predicates in (assertions or {}).items():
+            actual = _field(field_name)
+            for predicate, expected in (predicates or {}).items():
+                total_checked += 1
+                ok, detail = _check(actual, predicate, expected)
+                test_checks.append({
+                    "field":     field_name,
+                    "predicate": predicate,
+                    "expected":  expected,
+                    "actual":    actual,
+                    "passed":    ok,
+                    "detail":    detail,
+                })
+                if not ok:
+                    msg = f"{test_name}: {field_name}.{predicate} — {detail}"
+                    test_violations.append(msg)
+                    all_violations.append(msg)
+        tests_out.append({
+            "name":       test_name,
+            "passed":     not test_violations,
+            "checks":     test_checks,
+            "violations": test_violations,
+            "checked":    len(test_checks),
+        })
+
+    return {
+        "tests":      tests_out,
+        "passed":     not all_violations,
+        "violations": all_violations,
+        "checked":    total_checked,
+        "stability":  {"STRONG": 0, "MEDIUM": 0, "WEAK": 0},
+    }
 
 
 def _check_prop(
@@ -319,7 +563,11 @@ def _check_prop(
         actual = (node.get("text") or "")
         return actual, str(expected) in actual
     if prop == "visible":
-        actual = bool(node.get("visible", True))
+        v = node.get("visible")
+        # ``None`` means "field absent / unknown" (often dropped by the
+        # filter layer). Treat as visible — matches the pre-filter
+        # default of ``node.get("visible", True)``.
+        actual = True if v is None else bool(v)
         return actual, actual == bool(expected)
     if prop == "tag":
         actual = (node.get("tag") or "").lower()

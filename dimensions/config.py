@@ -64,8 +64,14 @@ class Config:
     schemas: Dict[str, Any] = field(default_factory=dict)
     reports_dir: str = "dimensions-reports/"
     scenario_roots: List[str] = field(
-        default_factory=lambda: ["tests/scenarios"]
+        default_factory=lambda: [
+            "tests/dimensions/scenarios",
+            "tests/dimensions/flows",
+        ]
     )
+    vars: Dict[str, str] = field(default_factory=dict)
+    protocol_defaults: Dict[str, Any] = field(default_factory=dict)
+    project_filter: Optional[Any] = None
 
     @classmethod
     def from_file(cls, path: Path) -> "Config":
@@ -86,8 +92,14 @@ class Config:
             schemas_dir=data.get("schemas_dir"),
             reports_dir=data.get("reports_dir", "dimensions-reports/"),
             scenario_roots=list(
-                data.get("scenario_roots", ["tests/scenarios"])
+                data.get("scenario_roots", [
+                    "tests/dimensions/scenarios",
+                    "tests/dimensions/flows",
+                ])
             ),
+            vars=dict(data.get("vars") or {}),
+            protocol_defaults=dict(data.get("protocol_defaults") or {}),
+            project_filter=data.get("filter"),
         )
         # Auto-discover specs in schemas_dir.
         if cfg.schemas_dir:
@@ -108,18 +120,49 @@ class Config:
             f"Unknown backend type: {kind}. Supported: 'filesystem'."
         )
 
-    def plugin_urls(self, plugin_name: str) -> Dict[str, str]:
-        """Return the ``urls:`` map for one plugin entry.
+    def root_filter(self):
+        """Project-level FilterSpec (top of the merge chain)."""
+        from dimensions.schema.filter import FilterSpec
+        if self.project_filter:
+            return FilterSpec.model_validate(self.project_filter)
+        return None
 
-        Used to resolve ``${name}`` placeholders in scenario fixtures so
-        a scenario JSON can reference config URL keys instead of
-        hardcoding environment-specific addresses.
+    def protocol_filter(self, protocol_name: str):
+        """FilterSpec declared in ``protocol_defaults.<protocol>.filter``."""
+        from dimensions.schema.filter import FilterSpec
+        defaults = (self.protocol_defaults or {}).get(protocol_name) or {}
+        raw = defaults.get("filter") or {}
+        return FilterSpec.model_validate(raw) if raw else None
+
+    def dim_filter(self, dim_name: str):
+        """FilterSpec declared on a specific ``dimensions[]`` entry."""
+        from dimensions.schema.filter import FilterSpec
+        for entry in self.plugins:
+            if entry.get("name") == dim_name:
+                raw = entry.get("filter") or (entry.get("config") or {}).get("filter")
+                if raw:
+                    return FilterSpec.model_validate(raw)
+        return None
+
+    def plugin_urls(self, plugin_name: str) -> Dict[str, str]:
+        """Return the substitution namespace for ``${name}`` placeholders
+        in scenarios.
+
+        Resolution order (first hit wins):
+          1. Top-level ``vars:`` (global, shared across every dimension).
+          2. Legacy ``plugins[<name>].config.urls`` (per-plugin namespace
+             from older configs — kept for back-compat; new configs put
+             everything under ``vars``).
         """
+        out: Dict[str, str] = {}
+        # Legacy first, then vars override.
         for entry in self.plugins:
             if entry.get("name") == plugin_name:
                 urls = (entry.get("config") or {}).get("urls") or {}
-                return dict(urls)
-        return {}
+                out.update({str(k): str(v) for k, v in urls.items()})
+        for k, v in self.vars.items():
+            out[str(k)] = str(v)
+        return out
 
     def plugin_classes(self) -> Dict[str, type]:
         """Resolve every configured plugin entry to its class, keyed by

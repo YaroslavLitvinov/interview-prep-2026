@@ -1,9 +1,9 @@
 """Pydantic models for the snapshot envelope contract.
 
-Per-dimension envelope variants live under `dimensions.kinds.<name>.schema`
-(e.g. `dimensions.kinds.data.DataEnvelope`). The discriminated union and
+Per-dimension envelope variants live under `dimensions.protocols.<name>.schema`
+(e.g. `dimensions.protocols.json_file.DataEnvelope`). The discriminated union and
 its `TypeAdapter` live under `dimensions.schema.envelope` and are populated
-once `dimensions.kinds` has been imported.
+once `dimensions.protocols` has been imported.
 
 This package re-exports only the universal pieces (observation kinds and
 the envelope base class). For per-kind types, import from the kind module

@@ -1,28 +1,30 @@
-"""Visual dimension — schema, primitives, and browser injection protocols."""
+"""Browser InjectionProtocol — schema, primitives, real + fixture impls."""
 
-from dimensions.kinds.visual.injection import (
+from dimensions.protocols.browser.injection import (
     BrowserProtocol,
     PageState,
     PlaywrightBrowserProtocol,
     pixel_diff,
 )
-from dimensions.kinds.visual.primitives import (
+from dimensions.protocols.browser.primitives import (
     DEFAULT_TIMEOUT_MS,
     DEFAULT_VIEWPORT,
     emit_screenshot,
     emit_tree,
     url_subject_dict,
 )
-from dimensions.kinds.visual.schema import UrlSubject, VisualEnvelope
+from dimensions.protocols.browser.filter import apply_filter
+from dimensions.protocols.browser.schema import BrowserEnvelope, UrlSubject
 
 __all__ = [
+    "BrowserEnvelope",
     "BrowserProtocol",
     "DEFAULT_TIMEOUT_MS",
     "DEFAULT_VIEWPORT",
     "PageState",
     "PlaywrightBrowserProtocol",
     "UrlSubject",
-    "VisualEnvelope",
+    "apply_filter",
     "emit_screenshot",
     "emit_tree",
     "pixel_diff",
